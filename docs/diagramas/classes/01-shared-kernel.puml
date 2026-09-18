@@ -1,0 +1,203 @@
+@startuml Shared-Kernel
+
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam ClassBorderColor #3D6B9E
+skinparam ClassBackgroundColor #EDF4FD
+skinparam ClassStereotypeFontColor #3D6B9E
+skinparam ClassFontSize 13
+skinparam ArrowColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+skinparam linetype ortho
+
+title <b>Shared Kernel</b> — Base reutilizada por todos os módulos\nNeuro-Gen · Clean Architecture + Hexagonal · Monólito Modular
+
+' ============================================================
+' AggregateRoot — Superclasse de todas as raízes de agregado.
+' Acumula Domain Events para despacho pela camada de application
+' após a operação de domínio ser persistida com sucesso.
+' ============================================================
+abstract class AggregateRoot {
+    - pendingEvents : List<DomainEvent>
+    # registerEvent(event : DomainEvent) : void
+    + pullDomainEvents() : List<DomainEvent>
+}
+
+note right of AggregateRoot
+  Padrão: os eventos ficam em memória
+  até o Use Case chamar pullDomainEvents()
+  e publicar via ApplicationEventPublisher.
+  Garante publicação somente após commit.
+end note
+
+' ============================================================
+' DomainEvent — Interface marker para eventos de domínio.
+' Publicados via Spring ApplicationEventPublisher.
+' Permitem comunicação desacoplada entre módulos.
+' ============================================================
+interface DomainEvent {
+    + eventId : UUID
+    + occurredAt : Instant
+    + aggregateId : String
+    + moduleName : String
+}
+
+' ============================================================
+' Value Objects comuns — imutáveis, igualdade por valor.
+' Lançam ValidationException no construtor se inválidos.
+' ============================================================
+class UserId <<valueobject>> {
+    - value : UUID
+    + UserId(value : UUID)
+    + value() : UUID
+    + {static} generate() : UserId
+    + {static} of(uuidStr : String) : UserId
+}
+
+class Email <<valueobject>> {
+    - value : String
+    + Email(value : String)
+    + value() : String
+    ' Valida RFC 5322, normaliza para lowercase.
+    ' Lança ValidationException se formato inválido.
+}
+
+class AuditMetadata <<valueobject>> {
+    - createdAt : Instant
+    - updatedAt : Instant
+    - createdBy : String
+    + AuditMetadata(createdAt, updatedAt, createdBy)
+    + touch(updatedBy : String) : AuditMetadata
+    ' Retorna NOVA instância ao atualizar — imutabilidade.
+}
+
+' ============================================================
+' Hierarquia de Exceções — padrão centralizado.
+' NeuroGenException carrega o código de erro e HttpStatus
+' para mapeamento automático no GlobalExceptionHandler.
+' ============================================================
+abstract class NeuroGenException {
+    - errorCode : String
+    - httpStatus : HttpStatus
+    + NeuroGenException(errorCode, message, httpStatus)
+    + getErrorCode() : String
+    + getHttpStatus() : HttpStatus
+}
+
+abstract class DomainException {
+    ' Violações das regras de negócio do domínio.
+    ' HTTP típico: 400 · 404 · 409 · 410 · 422
+}
+
+abstract class ApplicationException {
+    ' Falhas na orquestração dos use cases.
+    ' HTTP: 500 — nunca deve vazar detalhes ao cliente.
+}
+
+abstract class InfrastructureException {
+    ' Falhas em banco, fila, cache ou serviços externos.
+    ' HTTP: 502 Bad Gateway | 503 Service Unavailable
+}
+
+class NotFoundException {
+    + NotFoundException(resource : String, id : String)
+    ' HTTP 404 — recurso não existe para este usuário
+}
+
+class ForbiddenAccessException {
+    + ForbiddenAccessException(module : String, reason : String)
+    ' HTTP 403 — autenticado mas sem permissão no módulo
+}
+
+class ValidationException {
+    - fieldErrors : Map<String, String>
+    + ValidationException(fieldErrors : Map<String, String>)
+    + getFieldErrors() : Map<String, String>
+    ' HTTP 400 — dados de entrada inválidos (campo a campo)
+}
+
+class ConflictException {
+    + ConflictException(resource : String, detail : String)
+    ' HTTP 409 — recurso duplicado ou estado inconsistente
+}
+
+class GoneException {
+    ' HTTP 410 — recurso existia mas expirou.
+    ' Exemplo: token de convite passado o TTL de 72h.
+}
+
+' ============================================================
+' ErrorResponse — Record imutável Java 16+.
+' Representa o corpo JSON de toda resposta de erro da API.
+' Segue RFC 7807 (Problem Details for HTTP APIs).
+' Produzido EXCLUSIVAMENTE pelo GlobalExceptionHandler.
+' ============================================================
+class ErrorResponse <<record>> {
+    + timestamp : String
+    + status : int
+    + error : String
+    + code : String
+    + message : String
+    + path : String
+    + fieldErrors : Map<String, String>
+    + {static} of(ex : NeuroGenException, req : HttpServletRequest) : ErrorResponse
+}
+
+note bottom of ErrorResponse
+  Exemplo JSON:
+  {
+    "status": 403,
+    "code": "INSUFFICIENT_PERMISSION",
+    "message": "Módulo AGENDA não liberado",
+    "fieldErrors": {}
+  }
+end note
+
+' ============================================================
+' PagedResponse — Record genérico para listas paginadas.
+' Toda lista retornada pela API usa este wrapper.
+' Nunca retorna array puro — sempre com metadados de página.
+' ============================================================
+class PagedResponse <<record>> {
+    + content : List<T>
+    + page : int
+    + size : int
+    + totalElements : long
+    + totalPages : int
+    + last : boolean
+    + {static} from(springPage : Page<T>) : PagedResponse<T>
+}
+
+' ============================================================
+' GlobalExceptionHandler — @RestControllerAdvice Spring MVC.
+' Intercepta toda exceção lançada em qualquer camada e
+' mapeia para ErrorResponse com status HTTP correto.
+' Garante que nenhum stack trace vaze para o cliente.
+' ============================================================
+class GlobalExceptionHandler {
+    + handleDomain(ex : DomainException, req : HttpServletRequest) : ResponseEntity<ErrorResponse>
+    + handleValidation(ex : ValidationException, req : HttpServletRequest) : ResponseEntity<ErrorResponse>
+    + handleNotFound(ex : NotFoundException, req : HttpServletRequest) : ResponseEntity<ErrorResponse>
+    + handleForbidden(ex : ForbiddenAccessException, req : HttpServletRequest) : ResponseEntity<ErrorResponse>
+    + handleInfrastructure(ex : InfrastructureException, req : HttpServletRequest) : ResponseEntity<ErrorResponse>
+    + handleUnexpected(ex : Exception, req : HttpServletRequest) : ResponseEntity<ErrorResponse>
+}
+
+' Relações de herança
+NeuroGenException <|-- DomainException
+NeuroGenException <|-- ApplicationException
+NeuroGenException <|-- InfrastructureException
+DomainException <|-- NotFoundException
+DomainException <|-- ForbiddenAccessException
+DomainException <|-- ValidationException
+DomainException <|-- ConflictException
+DomainException <|-- GoneException
+
+' Relações estruturais
+AggregateRoot --> AuditMetadata : contém
+AggregateRoot ..> DomainEvent : publica
+GlobalExceptionHandler ..> ErrorResponse : produz
+GlobalExceptionHandler ..> NeuroGenException : captura
+
+@enduml

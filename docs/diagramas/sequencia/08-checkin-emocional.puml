@@ -1,0 +1,129 @@
+@startuml SEQ-CheckIn-Emocional
+
+!theme plain
+skinparam sequenceArrowThickness 2
+skinparam sequenceParticipantBorderColor #6A1B9A
+skinparam sequenceParticipantBackgroundColor #F8F0FC
+skinparam sequenceActorBorderColor #4A148C
+skinparam sequenceActorBackgroundColor #EDE7F6
+skinparam sequenceLifeLineBorderColor #6A1B9A
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>SEQ-08: Check-in Emocional + Acesso Autorizado pelo Apoio</b>\nNeuro-Gen · RF-07, RF-01.3, LGPD art. 5º, II\nDados sensíveis: criptografia pgcrypto em ng_sensitive.ng_mood_checkins
+
+actor "Titular" as titular
+actor "Apoio" as apoio
+participant "Client\n(Titular)" as clientT
+participant "Client\n(Apoio)" as clientA
+participant "BFF" as bff
+participant "CoreService\n(Emotional)" as core
+participant "CoreDB\n(ng_sensitive)" as db
+
+note over core, db #EDE7F6
+  Schema ng_sensitive: dados protegidos por LGPD art. 5º, II.
+  Coluna notes é cifrada com pgcrypto (AES no servidor).
+  Apenas titular pode criar/ver sem restrição.
+  Apoio: acesso condicional a permissões EMOTIONAL + HEALTH_DATA.
+end note
+
+== Fluxo: Titular Registra Check-in ==
+
+titular -> clientT : Registra humor:\nhumorScore=4, energyLevel=3,\nnote="Dia difícil mas consegui me concentrar"
+activate clientT
+
+clientT -> bff : POST /api/v1/emotional/checkins\n{moodScore: 4, energyLevel: 3, notes: "..."}
+activate bff
+
+bff -> core : CreateMoodCheckInCommand\n{userId=titular, moodScore: 4,\nenergyLevel: 3, rawNotes: "..."}
+activate core
+
+core -> db : SELECT COUNT(*) FROM ng_mood_checkins\nWHERE user_id=? AND date_trunc('day', checked_at)=TODAY
+activate db
+db --> core : count
+deactivate db
+
+alt Já fez check-in hoje
+    core --> bff : throws CheckInAlreadyTodayException
+    bff --> clientT : HTTP 409\n{code: CHECKIN_ALREADY_TODAY}
+else Primeiro check-in do dia
+    note over core
+      MoodCheckIn.create(cmd):
+      id = UUID
+      checkedAt = NOW()
+      MoodScore(4) — valida 1..5
+      EnergyLevel(3) — valida 1..5
+      notes cifrado no banco (pgcrypto)
+    end note
+
+    core -> db : INSERT ng_sensitive.ng_mood_checkins\n(user_id, mood_score=4, energy_level=3,\nnotes_enc=pgp_sym_encrypt(rawNotes, key),\nchecked_at=NOW())
+    activate db
+    db --> core : OK
+    deactivate db
+
+    core --> bff : MoodCheckInResult\n{id, moodScore, energyLevel, checkedAt}
+    deactivate core
+
+    bff --> clientT : HTTP 201 Created\n{MoodCheckInResponse}
+    deactivate bff
+
+    clientT --> titular : "Check-in registrado!\nSua nota de hoje: 4/5 😊"
+end
+
+deactivate clientT
+
+== Fluxo: Apoio Visualiza Tendência Emocional ==
+
+note over apoio : Quer ver como o Titular está se sentindo
+
+apoio -> clientA : Acessa módulo emocional do Titular
+activate clientA
+
+clientA -> bff : GET /api/v1/emotional/trends/{titularId}\n?period=7d\nAuthorization: Bearer {JWT Apoio}
+activate bff
+
+bff -> core : GetMoodTrendQuery\n{requesterId=apoioId, titularId, period}
+activate core
+
+note over core
+  Verificação dupla de permissão (RF-01.3):
+  1. Existe vínculo ACTIVE entre apoioId e titularId?
+  2. Vínculo possui permissão EMOTIONAL?
+  Ausência de qualquer permissão = acesso negado.
+end note
+
+core -> db : SELECT ng_core.ng_support_links\nWHERE apoio_id=? AND titular_id=?\nAND status=ACTIVE
+activate db
+db --> core : SupportLink
+deactivate db
+
+alt Vínculo não existe ou está REVOKED
+    core --> bff : throws ForbiddenAccessException
+    bff --> clientA : HTTP 403\n{code: LINK_NOT_FOUND}
+else Permissão EMOTIONAL ausente
+    core --> bff : throws InsufficientPermissionException
+    bff --> clientA : HTTP 403\n{code: PERMISSION_EMOTIONAL_REQUIRED\nmessage: "O Titular não liberou acesso ao módulo emocional."}
+else Permissões válidas
+    core -> db : SELECT ng_sensitive.ng_mood_checkins\nWHERE user_id=titularId\nAND checked_at >= NOW()-7d\nORDER BY checked_at ASC
+    activate db
+    db --> core : [{moodScore, energyLevel, checkedAt}]\n(SEM notas — notes_enc não incluído)
+    deactivate db
+
+    note over core #EDE7F6
+      Apoio NUNCA recebe o campo notes.
+      Apenas scores agregados são expostos.
+      Disclaimer obrigatório incluído na resposta.
+    end note
+
+    core --> bff : MoodTrendResult\n{checkins: [...], disclaimer: "..."}
+    deactivate core
+
+    bff --> clientA : HTTP 200 OK\n{MoodTrendResponse:\n  checkins: [scores sem notas],\n  disclaimer: "Estas informações são de saúde.\nUse-as apenas para apoio.\nNão substitui acompanhamento profissional.",\n  accessNote: "Acesso autorizado pelo Titular em <data>"\n}
+    deactivate bff
+
+    clientA --> apoio : Exibe gráfico de tendência:\nhumorScore e energyLevel dos últimos 7 dias\n+ disclaimer destacado
+end
+
+deactivate clientA
+
+@enduml

@@ -1,0 +1,129 @@
+@startuml SEQ-Registro-Verificacao
+
+!theme plain
+skinparam sequenceArrowThickness 2
+skinparam sequenceParticipantBorderColor #3D6B9E
+skinparam sequenceParticipantBackgroundColor #EDF4FD
+skinparam sequenceActorBorderColor #1A237E
+skinparam sequenceActorBackgroundColor #E8EAF6
+skinparam sequenceLifeLineBorderColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>SEQ-01: Registro de Conta + Verificação de E-mail</b>\nNeuro-Gen · RF-01.1, RF-01.6\nConta permanece PENDING_VERIFICATION até confirmação do e-mail
+
+actor "Titular" as titular
+participant "Client\n(Web/Mobile)" as client
+participant "BFF\n(API Gateway)" as bff
+participant "CoreService\n(Identity Module)" as core
+participant "CoreDB\n(ng_identity)" as db
+participant "EmailProvider\n(Transacional)" as email
+
+== Fluxo: Cadastro ==
+
+titular -> client : Preenche formulário\n(email, senha, role=TITULAR)
+activate client
+
+client -> bff : POST /api/v1/auth/register\n{email, password, role}
+activate bff
+
+note over bff
+  Bean Validation:
+  @NotBlank @Email email
+  @Size(min=8) password
+  @Pattern(TITULAR|APOIO) role
+end note
+
+bff -> core : RegisterUserCommand\n{email, rawPassword, role}
+activate core
+
+note over core
+  User.register(cmd):
+  1. Password.hash(rawPassword)
+     → Argon2id (m=19MB, t=2, p=1)
+  2. status = PENDING_VERIFICATION
+  3. emailVerified = false
+  4. Publica UserRegistered (evento)
+end note
+
+core -> db : INSERT ng_users\n(id, email, password_hash,\nrole, status=PENDING_VERIFICATION)
+activate db
+db --> core : OK
+deactivate db
+
+core -> db : INSERT ng_email_verifications\n(user_id, token_hash=SHA256(token),\nexpires_at=NOW()+24h)
+activate db
+db --> core : OK
+deactivate db
+
+core -> email : Envia e-mail de verificação\n(link com token raw — nunca armazenado)
+activate email
+email --> core : Queued
+deactivate email
+
+core --> bff : UserResult\n{id, status=PENDING_VERIFICATION}
+deactivate core
+
+bff --> client : HTTP 201 Created\n{UserProfileResponse}
+deactivate bff
+
+client --> titular : "Verifique seu e-mail\npara ativar a conta"
+deactivate client
+
+== Fluxo: Verificação de E-mail ==
+
+note over titular : Recebe e-mail e clica no link
+
+titular -> client : Abre link de verificação\n(deeplink ou URL web)
+activate client
+
+client -> bff : POST /api/v1/auth/verify-email\n{userId, token}
+activate bff
+
+bff -> core : VerifyEmailCommand\n{userId, rawToken}
+activate core
+
+core -> db : SELECT ng_email_verifications\nWHERE token_hash=SHA256(rawToken)
+activate db
+db --> core : {user_id, expires_at, used_at}
+deactivate db
+
+alt Token não encontrado
+    core --> bff : throws NotFoundException
+    bff --> client : HTTP 404
+else Token já usado (used_at NOT NULL)
+    core --> bff : throws ConflictException
+    bff --> client : HTTP 409
+else Token expirado (expires_at < NOW())
+    core --> bff : throws TokenExpiredException
+    bff --> client : HTTP 401\n{code: TOKEN_EXPIRED}
+else Token válido
+    note over core
+      user.verifyEmail():
+      emailVerified = true
+      status = ACTIVE
+      Publica UserEmailVerified
+    end note
+
+    core -> db : UPDATE ng_users\nSET email_verified=true, status=ACTIVE
+    activate db
+    db --> core : OK
+    deactivate db
+
+    core -> db : UPDATE ng_email_verifications\nSET used_at=NOW()
+    activate db
+    db --> core : OK
+    deactivate db
+
+    core --> bff : UserResult\n{status=ACTIVE, emailVerified=true}
+    deactivate core
+
+    bff --> client : HTTP 200 OK
+    deactivate bff
+
+    client --> titular : Redireciona para login\n"E-mail verificado! ✓"
+end
+
+deactivate client
+
+@enduml

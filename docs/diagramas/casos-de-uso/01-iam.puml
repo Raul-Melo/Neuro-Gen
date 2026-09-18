@@ -1,0 +1,92 @@
+@startuml UC-IAM
+
+!theme plain
+skinparam actorStyle awesome
+skinparam usecaseBorderColor #3D6B9E
+skinparam usecaseBackgroundColor #EDF4FD
+skinparam usecaseFontSize 12
+skinparam actorBorderColor #1A237E
+skinparam actorBackgroundColor #E8EAF6
+skinparam ArrowColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>Casos de Uso — Autenticação e Gestão de Conta (IAM)</b>\nNeuro-Gen · EPIC-01 (RF-01.1 a RF-01.12)
+
+left to right direction
+
+' Atores
+actor "Titular\n(usuário primário)" as titular
+actor "Apoio\n(responsável/terapeuta)" as apoio
+actor "Sistema\n(scheduler/jobs)" as sistema
+
+rectangle "Sistema: Identity (IAM)" {
+
+    ' Cadastro
+    usecase "Cadastrar conta\n(email/senha)" as UC_REG_EMAIL
+    usecase "Cadastrar via OAuth2\n(Google ou Apple)" as UC_REG_OAUTH
+    usecase "Enviar e-mail de\nverificação" as UC_SEND_VERIFY
+
+    ' Verificação e recuperação
+    usecase "Verificar e-mail\n(link de ativação)" as UC_VERIFY
+    usecase "Solicitar reset\nde senha" as UC_RESET_REQ
+    usecase "Redefinir senha\n(token 15min)" as UC_RESET
+
+    ' Autenticação
+    usecase "Fazer login\n(email/senha)" as UC_LOGIN
+    usecase "Fazer login\nvia OAuth2" as UC_LOGIN_OAUTH
+    usecase "Autenticar com TOTP\n(2FA — RF-01.9)" as UC_TOTP
+
+    ' Segurança da conta
+    usecase "Configurar 2FA\n(TOTP)" as UC_SETUP_2FA
+    usecase "Renovar access token\n(refresh token)" as UC_REFRESH
+    usecase "Revogar sessão\n(logout global)" as UC_LOGOUT
+
+    ' Gestão de conta
+    usecase "Excluir conta\n(soft-delete LGPD)" as UC_DELETE
+    usecase "Expirar tokens\nvencidos" as UC_EXPIRE
+}
+
+' Associações do Titular
+titular --> UC_REG_EMAIL
+titular --> UC_REG_OAUTH
+titular --> UC_VERIFY
+titular --> UC_RESET_REQ
+titular --> UC_RESET
+titular --> UC_LOGIN
+titular --> UC_LOGIN_OAUTH
+titular --> UC_TOTP
+titular --> UC_SETUP_2FA
+titular --> UC_REFRESH
+titular --> UC_LOGOUT
+titular --> UC_DELETE
+
+' Apoio também pode se autenticar
+apoio --> UC_REG_EMAIL
+apoio --> UC_REG_OAUTH
+apoio --> UC_LOGIN
+apoio --> UC_LOGIN_OAUTH
+apoio --> UC_REFRESH
+apoio --> UC_LOGOUT
+
+' Sistema
+sistema --> UC_EXPIRE
+
+' Inclusões (<<include>> = sempre executado)
+UC_REG_EMAIL .> UC_SEND_VERIFY : <<include>>
+UC_LOGIN .> UC_TOTP : <<include>>\n(se 2FA ativo)
+
+' Extensões (<<extend>> = executado sob condição)
+UC_SETUP_2FA .> UC_TOTP : <<extend>>\n(testa código após setup)
+
+note bottom of UC_TOTP
+  2FA opcional para login (RF-01.9).
+  Obrigatório para abrir o Cofre (RF-08).
+end note
+
+note bottom of UC_DELETE
+  Soft-delete com anonimização
+  após período legal (LGPD — RNF-RET.1).
+end note
+
+@enduml

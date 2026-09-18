@@ -1,0 +1,243 @@
+@startuml Module-Link
+
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam ClassBorderColor #3D6B9E
+skinparam ClassBackgroundColor #EDF4FD
+skinparam ClassStereotypeFontColor #3D6B9E
+skinparam ClassFontSize 13
+skinparam ArrowColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+skinparam EnumBackgroundColor #FFF8E1
+skinparam EnumBorderColor #F9A825
+skinparam linetype ortho
+
+title <b>Módulo: Link (Vínculo Titular/Apoio)</b>\nNeuro-Gen · Permissões opt-in — ausência = acesso negado (RF-01.3)
+
+package "domain" #EDF4FD {
+
+    ' ============================================================
+    ' SupportLink — Aggregate Root. Representa o vínculo.
+    ' Controla o ciclo de vida do convite e da PermissionMatrix.
+    ' Cada alteração de permissão é registrada no banco.
+    ' ============================================================
+    class SupportLink <<aggregate>> {
+        - id : LinkId
+        - titularId : UserId
+        - apoioId : UserId
+        - inviteToken : InviteToken
+        - permissions : PermissionMatrix
+        - status : LinkStatus
+        - audit : AuditMetadata
+        + {static} createInvite(titularId : UserId) : SupportLink
+        + accept(apoioId : UserId) : void
+        + revoke() : void
+        + expire() : void
+        + grantPermission(module : ModulePermission) : void
+        + revokePermission(module : ModulePermission) : void
+        + hasPermission(module : ModulePermission) : boolean
+        + isActive() : boolean
+        + isExpired() : boolean
+    }
+
+    class LinkId <<valueobject>> {
+        - value : UUID
+        + {static} generate() : LinkId
+        + value() : UUID
+    }
+
+    ' ============================================================
+    ' InviteToken — Token de convite com TTL de 72 horas (RF-01.2).
+    ' Armazenado como hash SHA-256 no banco (nunca texto claro).
+    ' Expirado → Titular deve gerar novo convite.
+    ' ============================================================
+    class InviteToken <<valueobject>> {
+        - value : String
+        - expiresAt : Instant
+        + {static} generate() : InviteToken
+        + isExpired() : boolean
+        + value() : String
+        + toHash() : String
+        ' toHash(): SHA-256 do token — persistido no banco
+    }
+
+    ' ============================================================
+    ' PermissionMatrix — Conjunto imutável de módulos liberados.
+    ' Cada grant/revoke retorna nova instância (imutabilidade).
+    ' Fonte única de verdade para o que Apoio pode visualizar.
+    ' O Cofre (Vault) NUNCA é listado — restrição hard-coded.
+    ' ============================================================
+    class PermissionMatrix <<valueobject>> {
+        - granted : Set<ModulePermission>
+        + {static} empty() : PermissionMatrix
+        + grant(module : ModulePermission) : PermissionMatrix
+        + revoke(module : ModulePermission) : PermissionMatrix
+        + has(module : ModulePermission) : boolean
+        + grantedModules() : Set<ModulePermission>
+    }
+
+    note right of PermissionMatrix
+      Regra crítica: qualquer módulo não
+      presente no Set é NEGADO por padrão.
+      Apoio recém-vinculado tem Set vazio.
+      (Opt-in — nunca opt-out — RF-01.3)
+    end note
+
+    ' ============================================================
+    ' LinkStatus — Estados do ciclo de vida do vínculo.
+    ' ============================================================
+    enum LinkStatus {
+        PENDING
+        ' Convite enviado, aguardando aceite do Apoio
+        ACTIVE
+        ' Vínculo ativo, permissões configuráveis
+        REVOKED
+        ' Encerrado pelo Titular (efeito imediato < 5s — RF-01.4)
+        EXPIRED
+        ' Token não aceito dentro do TTL 72h
+    }
+
+    ' ============================================================
+    ' ModulePermission — Módulos que podem ser liberados para Apoio.
+    ' VAULT propositalmente ausente — RF-08.5 hard-coded.
+    ' ============================================================
+    enum ModulePermission {
+        AGENDA
+        EMOTIONAL_CHECKIN
+        JOURNAL
+        FOCUS_HISTORY
+        ORGANIZATION
+        PROGRESS_REPORTS
+        SEND_REMINDERS
+        ' VAULT nunca aparece aqui — restrição estrutural
+    }
+
+    note right of ModulePermission
+      ⚠️ O módulo VAULT está ausente
+      propositalmente. Não existe forma de
+      liberar acesso ao Cofre para Apoio,
+      independente de configuração. (RF-08.5)
+    end note
+
+    ' Domain Events
+    class LinkCreated <<record>> {
+        + eventId : UUID
+        + occurredAt : Instant
+        + aggregateId : String
+        + moduleName : String
+        + linkId : String
+        + titularId : String
+        ' Consumido para notificar o Titular
+    }
+
+    class LinkRevoked <<record>> {
+        + eventId : UUID
+        + occurredAt : Instant
+        + aggregateId : String
+        + moduleName : String
+        + linkId : String
+        + titularId : String
+        + apoioId : String
+        ' Consumido pelo módulo Identity:
+        ' invalida TODAS as sessões ativas do Apoio
+    }
+
+    ' Exceções de domínio do módulo Link
+    class InviteExpiredException {
+        ' HTTP 410 Gone — token de convite expirado (> 72h)
+    }
+    class InviteAlreadyUsedException {
+        ' HTTP 409 Conflict — convite já foi aceito
+    }
+    class LinkAlreadyRevokedException {
+        ' HTTP 409 Conflict — vínculo já revogado anteriormente
+    }
+    class InsufficientPermissionException {
+        - requiredModule : ModulePermission
+        + InsufficientPermissionException(module : ModulePermission)
+        ' HTTP 403 Forbidden — Apoio acessa módulo não liberado
+    }
+
+    ' ============================================================
+    ' SupportLinkRepository — Porta de saída (hexagonal).
+    ' ============================================================
+    interface SupportLinkRepository {
+        + save(link : SupportLink) : SupportLink
+        + findById(id : LinkId) : Optional<SupportLink>
+        + findByTokenHash(hash : String) : Optional<SupportLink>
+        + findActiveByTitularId(titularId : UserId) : List<SupportLink>
+        + findActiveByApoioId(apoioId : UserId) : List<SupportLink>
+        + revokeAllByTitularId(titularId : UserId) : void
+    }
+}
+
+package "application" #F3F8FF {
+
+    class CreateInviteCommand <<record>> {
+        + titularId : String
+    }
+
+    class AcceptInviteCommand <<record>> {
+        + rawInviteToken : String
+        + apoioId : String
+    }
+
+    class UpdatePermissionsCommand <<record>> {
+        + linkId : String
+        + titularId : String
+        + modulesToGrant : Set<String>
+        + modulesToRevoke : Set<String>
+    }
+
+    class LinkResult <<record>> {
+        + id : String
+        + titularId : String
+        + apoioId : String
+        + apoioEmail : String
+        + status : String
+        + grantedPermissions : Set<String>
+        + createdAt : String
+    }
+}
+
+package "api" #F0FFF0 {
+
+    class InviteResponse <<record>> {
+        + linkId : String
+        + inviteToken : String
+        + inviteUrl : String
+        + expiresAt : String
+        ' inviteUrl: deeplink para aceite no app/web
+    }
+
+    class LinkResponse <<record>> {
+        + id : String
+        + apoioEmail : String
+        + status : String
+        + permissions : Set<String>
+        + linkedAt : String
+    }
+
+    class UpdatePermissionsRequest <<record>> {
+        + grant : Set<String>
+        + revoke : Set<String>
+        ' @NotNull — ao menos um deve ser não-vazio
+    }
+}
+
+' Relações
+SupportLink *-- LinkId
+SupportLink *-- InviteToken
+SupportLink *-- PermissionMatrix
+SupportLink --> LinkStatus
+PermissionMatrix --> ModulePermission
+SupportLink ..> LinkCreated : publica
+SupportLink ..> LinkRevoked : publica
+
+InviteExpiredException --|> GoneException
+InviteAlreadyUsedException --|> ConflictException
+LinkAlreadyRevokedException --|> ConflictException
+InsufficientPermissionException --|> ForbiddenAccessException
+
+@enduml

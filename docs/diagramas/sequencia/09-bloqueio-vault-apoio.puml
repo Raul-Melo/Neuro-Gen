@@ -1,0 +1,123 @@
+@startuml SEQ-Bloqueio-Vault-Apoio
+
+!theme plain
+skinparam sequenceArrowThickness 2
+skinparam sequenceParticipantBorderColor #8B0000
+skinparam sequenceParticipantBackgroundColor #FFF0F0
+skinparam sequenceActorBorderColor #8B0000
+skinparam sequenceActorBackgroundColor #FFE0E0
+skinparam sequenceLifeLineBorderColor #8B0000
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>SEQ-09: Tentativa de Acesso ao Cofre por Apoio — Bloqueio Imediato</b>\nNeuro-Gen · RF-08.5, ADR-005\nO Cofre é exclusivo do Titular — NUNCA acessível por Apoio
+
+actor "Apoio\n(mal-intencionado\nou confuso)" as apoio
+participant "Client\n(Apoio)" as clientA
+participant "BFF" as bff
+participant "VaultService\n(isolated)" as vault
+participant "VaultDB\n(ng_vault_auth_logs)" as db
+participant "AlertService\n(Security)" as alert
+
+note over clientA, db #FFE4E4
+  Esta sequência documenta um INCIDENTE DE SEGURANÇA.
+  Independente de qual permissão o Titular tenha concedido,
+  o Cofre (Vault) é absolutamente inacessível para o role APOIO.
+  RF-08.5: "Apoio nunca terá acesso ao Cofre, sob nenhuma circunstância."
+end note
+
+== Cenário A: Apoio tenta via API diretamente ==
+
+apoio -> clientA : Tenta acessar o cofre do Titular\n(ex: via URL direta ou request forjada)
+activate clientA
+
+clientA -> bff : GET /api/v1/vault/entries?titularId=...\nAuthorization: Bearer {JWT Apoio}
+activate bff
+
+note over bff #FFE4E4
+  BFF extrai claims do JWT:
+  role = APOIO → acesso ao módulo Vault NEGADO
+  imediatamente no gateway, antes de chegar
+  ao VaultService.
+end note
+
+bff -> vault : VaultAccessAttemptEvent\n{requesterId=apoioId, role=APOIO,\nendpoint="vault/entries",\ntitularId=..., ip=..., timestamp}
+activate vault
+
+vault -> db : INSERT ng_vault_auth_logs\n(user_id=apoioId, action=ACCESS_DENIED_APOIO,\ntargeted_user_id=titularId,\nip_address, user_agent, timestamp)
+activate db
+db --> vault : OK
+deactivate db
+
+note over vault #FFE4E4
+  Todo acesso negado ao Vault é logado
+  com action = ACCESS_DENIED_APOIO.
+  Log é imutável e retido por 12 meses.
+  Titular pode consultar estes logs.
+end note
+
+vault -> alert : Trigger security alert:\n{severity=HIGH,\ntype=APOIO_VAULT_ACCESS_ATTEMPT,\napoioId, titularId, ip, timestamp}
+activate alert
+
+alert -> alert : Notifica Titular:\n"Atenção: tentativa de acesso\nao seu cofre registrada."
+
+alert --> vault : OK
+deactivate alert
+
+vault --> bff : ApoioVaultAccessAttemptException
+deactivate vault
+
+bff --> clientA : HTTP 403 Forbidden\n{\n  code: "VAULT_ACCESS_DENIED",\n  message: "O Cofre é exclusivo do Titular.\n  Este incidente foi registrado.",\n  type: "https://neurogenapp.com/errors/vault-access-denied"\n}
+deactivate bff
+
+clientA --> apoio : Tela de erro:\n"Acesso negado ao Cofre.\nEsta tentativa foi registrada."
+deactivate clientA
+
+== Cenário B: Titular tenta conceder permissão de Vault ==
+
+note over apoio : Apoio pede ao Titular para liberar acesso ao Cofre
+
+apoio -> clientA : Pede ao Titular para liberar permissão VAULT
+activate clientA
+
+clientA -> bff : PATCH /api/v1/links/{linkId}/permissions\n{grant: ["VAULT"]}
+activate bff
+
+note over bff
+  Bean Validation no servidor:
+  ModulePermission.VAULT não existe na lista
+  de permissões concedíveis (RF-08.5).
+end note
+
+bff --> clientA : HTTP 422 Unprocessable Entity\n{\n  code: "PERMISSION_VAULT_NOT_GRANTABLE",\n  message: "A permissão VAULT não pode ser\n  concedida a nenhum Apoio."\n}
+deactivate bff
+
+clientA --> apoio : "Não é possível conceder\nacesso ao Cofre para um Apoio."
+deactivate clientA
+
+== Consulta de Logs pelo Titular ==
+
+note over clientA : Titular vê notificação de tentativa suspeita
+
+clientA -> bff : GET /api/v1/vault/audit-log\n(Titular autenticado)
+activate bff
+activate clientA
+
+bff -> vault : GetVaultAuditLogQuery\n{ownerId=titularId}
+activate vault
+
+vault -> db : SELECT ng_vault_auth_logs\nWHERE user_id=titularId\nOR targeted_user_id=titularId\nORDER BY timestamp DESC
+activate db
+db --> vault : [{action=ACCESS_DENIED_APOIO,\napoioId, ip, timestamp}, ...]
+deactivate db
+
+vault --> bff : [VaultAuditLogEntry]
+deactivate vault
+
+bff --> clientA : HTTP 200 OK\n[{\n  action: "ACCESS_DENIED_APOIO",\n  performedBy: {apoioId, name},\n  ip: "...",\n  timestamp: "...",\n  details: "Tentativa de acesso ao cofre bloqueada"\n}]
+deactivate bff
+
+clientA --> clientA : Titular visualiza histórico de tentativas\ne pode revogar vínculo com Apoio suspeito
+deactivate clientA
+
+@enduml

@@ -1,0 +1,165 @@
+@startuml SEQ-Tarefa-Lembrete-Nudge
+
+!theme plain
+skinparam sequenceArrowThickness 2
+skinparam sequenceParticipantBorderColor #3D6B9E
+skinparam sequenceParticipantBackgroundColor #EDF4FD
+skinparam sequenceActorBorderColor #1A237E
+skinparam sequenceActorBackgroundColor #E8EAF6
+skinparam sequenceLifeLineBorderColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>SEQ-05: Criar Tarefa com Lembrete Persistente (Nudge)</b>\nNeuro-Gen · RF-03.2, RF-03.4\nNudge: repete M vezes a cada N minutos até confirmação de leitura
+
+actor "Titular" as titular
+participant "Client" as client
+participant "BFF" as bff
+participant "CoreService\n(Agenda)" as core
+participant "CoreDB\n(ng_core)" as db
+participant "Queue\n(RabbitMQ)" as queue
+participant "NotifService\n(Notification)" as notif
+participant "FCM/APNs\n(Push Provider)" as push
+
+== Fluxo: Criação da Tarefa com Lembrete ==
+
+titular -> client : Cria tarefa com lembrete nudge:\n"5 min antes, repetir a cada 3min, máx 3x"
+activate client
+
+client -> bff : POST /api/v1/tasks\n{\n  title: "Reunião TDAH Group",\n  dueDate: ...,\n  reminders: [{\n    minutesBefore: 5,\n    persistent: true,\n    repeatIntervalMinutes: 3,\n    maxRepetitions: 3\n  }]\n}
+activate bff
+
+bff -> core : CreateTaskCommand
+activate core
+
+note over core
+  Task.create(cmd):
+  Reminder criado:
+    status = SCHEDULED
+    persistent = true
+    repeatIntervalMinutes = 3
+    maxRepetitions = 3
+    currentRepetitions = 0
+    nextFireAt = dueDate - 5min
+end note
+
+core -> db : INSERT ng_tasks + INSERT ng_reminders\n(status=SCHEDULED, next_fire_at=dueDate-5min)
+activate db
+db --> core : OK
+deactivate db
+
+core --> bff : TaskResult
+bff --> client : HTTP 201 Created {TaskResponse}
+deactivate bff
+deactivate core
+
+client --> titular : Tarefa criada com lembrete configurado
+deactivate client
+
+== Fluxo: Dispatcher — 1ª Tentativa ==
+
+note over core
+  Scheduler (job a cada 30s):
+  SELECT ng_reminders
+  WHERE status=SCHEDULED
+  AND next_fire_at <= NOW()
+end note
+
+core -> db : SELECT lembretes a disparar
+activate core
+activate db
+db --> core : [Reminder do Titular]
+deactivate db
+
+core -> queue : Publica ReminderFireEvent\n{userId, reminderId,\nchannel=PUSH}
+activate queue
+
+core -> db : UPDATE ng_reminders\nSET status=SENT,\ncurrent_repetitions=1
+activate db
+db --> core : OK
+deactivate db
+
+deactivate core
+
+notif -> queue : Consome ReminderFireEvent
+activate notif
+deactivate queue
+
+notif -> db : SELECT ng_notification_channels\nWHERE user_id=? AND channel_type=PUSH\nAND active=true
+activate db
+db --> notif : {endpoint: FCM_TOKEN}
+deactivate db
+
+notif -> push : Envia push notification:\n"📅 Reunião em 5 minutos!"
+activate push
+push --> notif : accepted
+deactivate push
+
+notif -> db : INSERT ng_notification_logs\n(status=SENT, sent_at=NOW())
+activate db
+db --> notif : OK
+deactivate db
+deactivate notif
+
+== Fluxo: Titular NÃO confirma em 3 minutos ==
+
+note over core
+  Scheduler detecta:
+  status=SENT, next_fire_at expirado,
+  persistent=true,
+  currentRepetitions(1) < maxRepetitions(3)
+end note
+
+core -> db : UPDATE ng_reminders\nSET next_fire_at = NOW() + 3min,\ncurrent_repetitions = 2
+activate core
+activate db
+db --> core : OK
+deactivate db
+
+core -> queue : Publica novo ReminderFireEvent\n(2ª tentativa)
+deactivate core
+
+note over notif : Envia 2ª notificação push
+
+== Fluxo: Titular CONFIRMA o 2º lembrete ==
+
+titular -> client : Clica na notificação
+activate client
+activate titular
+
+client -> bff : POST /api/v1/reminders/{id}/confirm
+activate bff
+
+bff -> core : ConfirmReminderCommand\n{reminderId, userId}
+activate core
+
+core -> db : UPDATE ng_reminders\nSET status=CONFIRMED,\nconfirmation_at=NOW()
+activate db
+db --> core : OK
+deactivate db
+
+note over core
+  Nudge encerrado — confirmação recebida.
+  Nenhuma repetição adicional será enviada.
+end note
+
+core --> bff : OK
+deactivate core
+
+bff --> client : HTTP 200 OK
+deactivate bff
+client --> titular : Lembrete marcado como lido ✓
+deactivate client
+deactivate titular
+
+== Alternativa: Limite atingido sem confirmação ==
+
+note over core #FFE4E4
+  Após 3ª tentativa sem confirmação:
+  UPDATE ng_reminders
+  SET status = UNCONFIRMED_LIMIT_REACHED
+  Item aparece destacado no dashboard:
+  "⚠️ Lembrete não confirmado" (RF-03.2)
+end note
+
+@enduml

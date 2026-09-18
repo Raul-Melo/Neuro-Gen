@@ -1,0 +1,279 @@
+@startuml Module-Identity
+
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam ClassBorderColor #3D6B9E
+skinparam ClassBackgroundColor #EDF4FD
+skinparam ClassStereotypeFontColor #3D6B9E
+skinparam ClassFontSize 13
+skinparam ArrowColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+skinparam EnumBackgroundColor #FFF8E1
+skinparam EnumBorderColor #F9A825
+skinparam linetype ortho
+
+title <b>Módulo: Identity (IAM)</b>\nNeuro-Gen · Camadas: domain / application / api / infrastructure
+
+' ============================================================
+' DOMAIN LAYER
+' Aggregate, Entities, Value Objects, Enums, Exceptions, Repository interface
+' ============================================================
+
+package "domain" #EDF4FD {
+
+    ' ============================================================
+    ' User — Aggregate Root. Representa a conta do usuário.
+    ' Role define se é Titular (dono dos dados) ou Apoio (suporte).
+    ' Senha NUNCA exposta fora do aggregate — apenas o hash.
+    ' ============================================================
+    class User <<aggregate>> {
+        - id : UserId
+        - email : Email
+        - passwordHash : Password
+        - role : UserRole
+        - status : AccountStatus
+        - emailVerified : boolean
+        - totpSecret : TotpSecret
+        - audit : AuditMetadata
+        + {static} register(cmd : RegisterUserCommand) : User
+        + verifyEmail(token : String) : void
+        + changePassword(currentRaw : String, newRaw : String) : void
+        + enableTotp(secret : TotpSecret) : void
+        + disableTotp(totpCode : String) : void
+        + suspend(reason : String) : void
+        + requestDeletion() : void
+        + isActive() : boolean
+        + requiresTotp() : boolean
+    }
+
+    ' ============================================================
+    ' Password — Value Object para hash de senha.
+    ' Argon2id com parâmetros OWASP: m=19MB, t=2, p=1 (RNF-SEC.5).
+    ' Texto plano NUNCA é armazenado ou logado.
+    ' ============================================================
+    class Password <<valueobject>> {
+        - argon2Hash : String
+        + {static} hash(rawPassword : String) : Password
+        + matches(rawPassword : String) : boolean
+        ' Lança ValidationException se senha < 8 chars
+    }
+
+    ' ============================================================
+    ' TotpSecret — Value Object para segredo TOTP (2FA).
+    ' Armazenado criptografado em repouso (AES-256-GCM).
+    ' Verificação do código feita no domínio, não na infra.
+    ' ============================================================
+    class TotpSecret <<valueobject>> {
+        - encryptedBase32Secret : String
+        + TotpSecret(encryptedBase32Secret : String)
+        + verifyCode(code : int) : boolean
+        + toOtpAuthUri(userEmail : String) : String
+        ' Janela de tolerância TOTP: ±1 período (30s)
+    }
+
+    ' ============================================================
+    ' UserRole — Papel estrutural da conta no sistema.
+    ' TITULAR: dono dos dados, define permissões de Apoio.
+    ' APOIO: acessa dados conforme permissões concedidas pelo Titular.
+    ' ============================================================
+    enum UserRole {
+        TITULAR
+        APOIO
+    }
+
+    ' ============================================================
+    ' AccountStatus — Ciclo de vida da conta.
+    ' PENDING_VERIFICATION: aguarda clique no link de e-mail.
+    ' DELETED: soft-delete — dados anonimizados após período legal.
+    ' ============================================================
+    enum AccountStatus {
+        PENDING_VERIFICATION
+        ACTIVE
+        SUSPENDED
+        DELETED
+    }
+
+    ' Exceções de domínio do módulo Identity
+    class InvalidCredentialsException {
+        ' HTTP 401 — e-mail ou senha incorretos.
+        ' Mensagem genérica: não revela qual campo está errado.
+    }
+    class AccountAlreadyExistsException {
+        ' HTTP 409 — e-mail já cadastrado no sistema
+    }
+    class EmailNotVerifiedException {
+        ' HTTP 403 — login sem verificação de e-mail (RF-01.6)
+    }
+    class TokenExpiredException {
+        ' HTTP 401 — token de verificação/reset expirado
+    }
+    class TotpRequiredException {
+        ' HTTP 401 — step de 2FA pendente, código necessário
+    }
+    class InvalidTotpCodeException {
+        ' HTTP 401 — código TOTP inválido ou fora da janela 30s
+    }
+    class AccountSuspendedException {
+        ' HTTP 403 — conta suspensa, autenticação negada
+    }
+
+    ' ============================================================
+    ' UserRepository — Porta de saída (hexagonal / driven port).
+    ' O domínio não importa JPA — conhece apenas esta interface.
+    ' Implementada por UserRepositoryAdapter na camada de infra.
+    ' ============================================================
+    interface UserRepository {
+        + save(user : User) : User
+        + findById(id : UserId) : Optional<User>
+        + findByEmail(email : Email) : Optional<User>
+        + existsByEmail(email : Email) : boolean
+        + deleteById(id : UserId) : void
+    }
+
+    ' Domain Events publicados por User
+    class UserRegistered <<record>> {
+        + eventId : UUID
+        + occurredAt : Instant
+        + aggregateId : String
+        + moduleName : String
+        + userId : String
+        + email : String
+        + role : String
+        ' Consumido pelo módulo de Onboarding e Notificações
+    }
+
+    class UserEmailVerified <<record>> {
+        + eventId : UUID
+        + occurredAt : Instant
+        + aggregateId : String
+        + moduleName : String
+        + userId : String
+        ' Consumido para liberar acesso completo à conta
+    }
+}
+
+' ============================================================
+' APPLICATION LAYER
+' Use Cases (portas de entrada) + Commands + Results (Records)
+' ============================================================
+
+package "application" #F3F8FF {
+
+    ' Commands — entradas imutáveis para os Use Cases.
+    ' Validados com Bean Validation antes de chegar ao Use Case.
+    class RegisterUserCommand <<record>> {
+        + email : String
+        + rawPassword : String
+        + role : String
+        ' Mapeado de RegisterRequest pelo controller
+    }
+
+    class LoginCommand <<record>> {
+        + email : String
+        + rawPassword : String
+        + totpCode : String
+        ' totpCode: null se 2FA não ativo na conta
+    }
+
+    class VerifyEmailCommand <<record>> {
+        + userId : String
+        + token : String
+    }
+
+    class ResetPasswordCommand <<record>> {
+        + resetToken : String
+        + newRawPassword : String
+    }
+
+    ' Results — saída imutável dos Use Cases para a API.
+    ' NUNCA expõem hash de senha, totpSecret ou tokens internos.
+    class UserResult <<record>> {
+        + id : String
+        + email : String
+        + role : String
+        + status : String
+        + emailVerified : boolean
+        + totpEnabled : boolean
+        + createdAt : String
+    }
+
+    class AuthResult <<record>> {
+        + accessToken : String
+        + refreshToken : String
+        + expiresIn : long
+        + user : UserResult
+        ' accessToken: JWT 15min (stateless)
+        ' refreshToken: token opaco 30 dias (persistido no banco)
+    }
+}
+
+' ============================================================
+' API LAYER
+' Request/Response DTOs exclusivos dos controllers HTTP
+' ============================================================
+
+package "api" #F0FFF0 {
+
+    ' Request DTOs — entrada HTTP (validados com Bean Validation)
+    class RegisterRequest <<record>> {
+        + email : String
+        + password : String
+        + role : String
+        ' @NotBlank @Email
+        ' @NotBlank @Size(min=8, max=128)
+        ' @NotNull @Pattern(regexp="TITULAR|APOIO")
+    }
+
+    class LoginRequest <<record>> {
+        + email : String
+        + password : String
+        + totpCode : String
+    }
+
+    class ResetPasswordRequest <<record>> {
+        + token : String
+        + newPassword : String
+        ' @NotBlank @Size(min=8)
+    }
+
+    ' Response DTOs — saída HTTP para o cliente
+    class TokenResponse <<record>> {
+        + accessToken : String
+        + refreshToken : String
+        + expiresIn : long
+        + tokenType : String
+        ' tokenType sempre "Bearer"
+    }
+
+    class UserProfileResponse <<record>> {
+        + id : String
+        + email : String
+        + role : String
+        + status : String
+        + emailVerified : boolean
+        + totpEnabled : boolean
+        + createdAt : String
+    }
+}
+
+' ============================================================
+' Relações entre camadas e componentes
+' ============================================================
+
+User *-- Password : passwordHash
+User *-- TotpSecret : totpSecret (nullable)
+User --> UserRole : role
+User --> AccountStatus : status
+User ..> UserRegistered : publica
+User ..> UserEmailVerified : publica
+
+InvalidCredentialsException --|> DomainException
+AccountAlreadyExistsException --|> ConflictException
+EmailNotVerifiedException --|> ForbiddenAccessException
+TokenExpiredException --|> DomainException
+TotpRequiredException --|> DomainException
+InvalidTotpCodeException --|> DomainException
+AccountSuspendedException --|> ForbiddenAccessException
+
+@enduml

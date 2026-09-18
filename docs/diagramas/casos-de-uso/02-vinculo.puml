@@ -1,0 +1,82 @@
+@startuml UC-Vinculo
+
+!theme plain
+skinparam actorStyle awesome
+skinparam usecaseBorderColor #3D6B9E
+skinparam usecaseBackgroundColor #EDF4FD
+skinparam usecaseFontSize 12
+skinparam actorBorderColor #1A237E
+skinparam actorBackgroundColor #E8EAF6
+skinparam ArrowColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>Casos de Uso — Vínculo Titular/Apoio</b>\nNeuro-Gen · EPIC-01 (RF-01.2 a RF-01.11)\nPermissões opt-in — ausência = acesso negado
+
+left to right direction
+
+actor "Titular\n(dono dos dados)" as titular
+actor "Apoio\n(responsável/terapeuta)" as apoio
+actor "Sistema\n(scheduler)" as sistema
+
+rectangle "Sistema: Link (Vínculo)" {
+
+    usecase "Criar convite\n(gerar token 72h)" as UC_CREATE_INVITE
+    usecase "Aceitar convite\n(usar token)" as UC_ACCEPT
+    usecase "Revogar vínculo\n(efeito imediato < 5s)" as UC_REVOKE
+    usecase "Invalidar sessões\nativas do Apoio" as UC_INVALIDATE
+
+    usecase "Conceder permissão\nde módulo" as UC_GRANT
+    usecase "Revogar permissão\nde módulo" as UC_REVOKE_PERM
+    usecase "Ver lista de\nvínculos ativos" as UC_LIST
+    usecase "Ver log de acessos\ndo Apoio" as UC_ACCESS_LOG
+    usecase "Expirar convite\napós TTL 72h" as UC_EXPIRE
+}
+
+' Titular
+titular --> UC_CREATE_INVITE
+titular --> UC_REVOKE
+titular --> UC_GRANT
+titular --> UC_REVOKE_PERM
+titular --> UC_LIST
+titular --> UC_ACCESS_LOG
+
+' Apoio
+apoio --> UC_ACCEPT
+
+' Sistema
+sistema --> UC_EXPIRE
+sistema --> UC_INVALIDATE
+
+' <<include>>: sempre executado como parte do UC principal
+UC_REVOKE .> UC_INVALIDATE : <<include>>\n(invalida sessões ativas)
+
+' <<extend>>: executado sob condição
+UC_CREATE_INVITE .> UC_EXPIRE : <<extend>>\n(scheduler marca como EXPIRED após 72h)
+
+note right of UC_GRANT
+  Módulos liberáveis:
+  AGENDA, EMOTIONAL_CHECKIN,
+  JOURNAL, FOCUS_HISTORY,
+  ORGANIZATION, PROGRESS_REPORTS,
+  SEND_REMINDERS.
+
+  ⚠️ VAULT nunca aparece aqui.
+  Restrição hard-coded (RF-08.5).
+end note
+
+note right of UC_REVOKE
+  Efeito < 5 segundos (RF-01.4).
+  Sessão ativa do Apoio perde
+  acesso imediatamente via
+  invalidação de cache Redis.
+end note
+
+note bottom of UC_ACCESS_LOG
+  Titular visualiza quando
+  cada Apoio acessou e quais
+  módulos foram consultados.
+  (RF-01.11)
+end note
+
+@enduml

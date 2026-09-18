@@ -1,0 +1,173 @@
+@startuml DER-Schema-Identity
+
+!theme plain
+skinparam EntityBorderColor #3D6B9E
+skinparam EntityBackgroundColor #EDF4FD
+skinparam EntityFontSize 13
+skinparam ArrowColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+skinparam linetype ortho
+
+title <b>DER — Schema: ng_identity</b>\nNeuro-Gen · Autenticação, Sessões, Auditoria\nPostgreSQL 16 — banco: ng_core_db
+
+note as N_IDENTITY
+  Schema: ng_identity
+  Dados de autenticação e controle de conta.
+  Senhas e tokens armazenados como hash (nunca texto claro).
+  Retenção de audit_logs: mínimo 12 meses (RNF-SEC.8).
+end note
+
+' ============================================================
+' ng_users — Tabela central de contas.
+' password_hash: Argon2id (m=19MB, t=2, p=1 — RNF-SEC.5).
+' role: TITULAR | APOIO
+' status: PENDING_VERIFICATION | ACTIVE | SUSPENDED | DELETED
+' ============================================================
+entity "ng_users" as users {
+    * id : uuid <<PK>>
+    --
+    * email : varchar(320) <<UNIQUE>>
+    * password_hash : varchar(255)
+    * role : varchar(20)
+    * status : varchar(30)
+    * email_verified : boolean
+    * totp_enabled : boolean
+    * created_at : timestamptz
+    * updated_at : timestamptz
+    deleted_at : timestamptz
+}
+
+note right of users
+  email normalizado para lowercase.
+  deleted_at NULL = conta ativa.
+  Soft-delete: dados anonimizados
+  após período legal (RNF-RET.1).
+end note
+
+' ============================================================
+' ng_sessions — Refresh tokens persistidos.
+' access_token: JWT stateless — NÃO é persistido aqui.
+' refresh_token_hash: SHA-256 do token opaco.
+' Revogação: SET revoked_at = NOW()
+' ============================================================
+entity "ng_sessions" as sessions {
+    * id : uuid <<PK>>
+    --
+    * user_id : uuid <<FK>>
+    * refresh_token_hash : varchar(64) <<UNIQUE>>
+    * expires_at : timestamptz
+    device_info : varchar(255)
+    * created_at : timestamptz
+    revoked_at : timestamptz
+}
+
+note right of sessions
+  refresh_token_hash = SHA-256(token).
+  Token real enviado ao cliente,
+  nunca armazenado no banco.
+  revoked_at NULL = sessão ativa.
+end note
+
+' ============================================================
+' ng_email_verifications — Tokens de verificação de e-mail.
+' TTL: 24 horas. Invalidado após uso (used_at NOT NULL).
+' ============================================================
+entity "ng_email_verifications" as email_ver {
+    * id : uuid <<PK>>
+    --
+    * user_id : uuid <<FK>>
+    * token_hash : varchar(64) <<UNIQUE>>
+    * expires_at : timestamptz
+    used_at : timestamptz
+    * created_at : timestamptz
+}
+
+' ============================================================
+' ng_password_resets — Tokens de redefinição de senha.
+' TTL: 15 minutos (RF-01.7). Uso único.
+' ============================================================
+entity "ng_password_resets" as pwd_resets {
+    * id : uuid <<PK>>
+    --
+    * user_id : uuid <<FK>>
+    * token_hash : varchar(64) <<UNIQUE>>
+    * expires_at : timestamptz
+    used_at : timestamptz
+    * created_at : timestamptz
+}
+
+' ============================================================
+' ng_totp_secrets — Segredo TOTP para autenticação de 2 fatores.
+' Armazenado criptografado em repouso (AES-256-GCM).
+' Relação 1:1 com ng_users.
+' ============================================================
+entity "ng_totp_secrets" as totp {
+    * id : uuid <<PK>>
+    --
+    * user_id : uuid <<FK, UNIQUE>>
+    * encrypted_secret : text
+    * enabled_at : timestamptz
+    * created_at : timestamptz
+}
+
+note right of totp
+  encrypted_secret: base32 cifrado
+  com AES-256-GCM em repouso.
+  UNIQUE user_id = 1 segredo por conta.
+end note
+
+' ============================================================
+' ng_consent_records — Registro auditável de aceite de políticas.
+' Versão e timestamp de cada consentimento (RNF-PRIV.8).
+' Imutável: nunca sofre UPDATE — somente INSERT.
+' ============================================================
+entity "ng_consent_records" as consent {
+    * id : uuid <<PK>>
+    --
+    * user_id : uuid <<FK>>
+    * privacy_policy_version : varchar(20)
+    * terms_version : varchar(20)
+    * ip_address : varchar(45)
+    * consented_at : timestamptz
+    * created_at : timestamptz
+}
+
+' ============================================================
+' ng_audit_logs — Log imutável de ações sensíveis (RNF-SEC.8).
+' Sem UPDATE/DELETE nesta tabela — append-only.
+' Retenção mínima 12 meses.
+' Inclui: vínculo/revogação, permissão, tentativas ao Cofre.
+' ============================================================
+entity "ng_audit_logs" as audit {
+    * id : uuid <<PK>>
+    --
+    user_id : uuid
+    * action : varchar(60)
+    resource_type : varchar(60)
+    resource_id : varchar(36)
+    ip_address : varchar(45)
+    user_agent_hash : varchar(64)
+    metadata : jsonb
+    * created_at : timestamptz
+}
+
+note right of audit
+  user_id: NULL para ações de sistema.
+  Exemplos de action:
+    LINK_REVOKED
+    VAULT_ACCESS_DENIED_APOIO
+    PERMISSION_GRANTED
+    PASSWORD_RESET_REQUESTED
+  Sem updated_at: tabela imutável.
+end note
+
+' Relacionamentos
+users ||--o{ sessions : "possui (1:N)"
+users ||--o{ email_ver : "possui (1:N)"
+users ||--o{ pwd_resets : "possui (1:N)"
+users ||--o| totp : "pode ter (0:1)"
+users ||--o{ consent : "possui (1:N)"
+users ||--o{ audit : "gera (0:N)"
+
+@enduml

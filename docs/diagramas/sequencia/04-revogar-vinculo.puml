@@ -1,0 +1,124 @@
+@startuml SEQ-Revogar-Vinculo
+
+!theme plain
+skinparam sequenceArrowThickness 2
+skinparam sequenceParticipantBorderColor #3D6B9E
+skinparam sequenceParticipantBackgroundColor #EDF4FD
+skinparam sequenceActorBorderColor #1A237E
+skinparam sequenceActorBackgroundColor #E8EAF6
+skinparam sequenceLifeLineBorderColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>SEQ-04: Revogação de Vínculo com Invalidação de Sessão</b>\nNeuro-Gen · RF-01.4\nEfeito imediato: Apoio perde acesso em < 5 segundos
+
+actor "Titular" as titular
+actor "Apoio\n(em outra sessão)" as apoio
+participant "Client\n(Titular)" as clientT
+participant "Client\n(Apoio)" as clientA
+participant "BFF" as bff
+participant "CoreService\n(Link + Identity)" as core
+participant "CoreDB\n(ng_core\n+ ng_identity)" as db
+participant "Redis\n(Session Cache)" as redis
+
+== Fluxo: Titular Revoga o Vínculo ==
+
+titular -> clientT : Clica "Encerrar vínculo" com Apoio X
+activate clientT
+
+note over clientT
+  Confirmação explícita obrigatória
+  antes de ação destrutiva (RNF-USA.7):
+  "Tem certeza? O Apoio perderá
+  acesso imediatamente."
+end note
+
+titular -> clientT : Confirma revogação
+clientT -> bff : DELETE /api/v1/links/{linkId}\nAuthorization: Bearer {JWT Titular}
+activate bff
+
+note over bff : Valida JWT\nExtrai titularId dos claims
+
+bff -> core : RevokeLinkCommand\n{linkId, titularId}
+activate core
+
+core -> db : SELECT ng_support_links\nWHERE id=? AND titular_id=?
+activate db
+db --> core : SupportLink
+deactivate db
+
+alt Vínculo não encontrado ou não pertence ao Titular
+    core --> bff : throws NotFoundException /\nForbiddenAccessException
+    bff --> clientT : HTTP 404 / 403
+else Vínculo já revogado
+    core --> bff : throws LinkAlreadyRevokedException
+    bff --> clientT : HTTP 409\n{code: LINK_ALREADY_REVOKED}
+else Vínculo ativo — prossegue
+    note over core
+      link.revoke():
+      status = REVOKED
+      revoked_at = NOW()
+      Publica LinkRevoked (DomainEvent)
+    end note
+
+    core -> db : UPDATE ng_support_links\nSET status=REVOKED,\nrevoked_at=NOW()
+    activate db
+    db --> core : OK
+    deactivate db
+
+    core -> db : DELETE ng_link_permissions\nWHERE link_id=?
+    activate db
+    db --> core : OK
+    deactivate db
+
+    note over core
+      Listener de LinkRevoked:
+      Invalida TODAS as sessões ativas do Apoio
+      (RF-01.4 — efeito < 5s)
+    end note
+
+    core -> db : UPDATE ng_identity.ng_sessions\nSET revoked_at=NOW()\nWHERE user_id=apoioId\nAND revoked_at IS NULL
+    activate db
+    db --> core : N sessões revogadas
+    deactivate db
+
+    core -> redis : DEL session:{apoioId}:active\n(invalida cache imediatamente)
+    activate redis
+    redis --> core : OK
+    deactivate redis
+
+    core --> bff : Sucesso
+    deactivate core
+
+    bff --> clientT : HTTP 204 No Content
+    deactivate bff
+
+    clientT --> titular : "Vínculo encerrado.\nO Apoio perdeu acesso imediatamente."
+end
+
+deactivate clientT
+
+== Fluxo: Apoio tenta acessar após revogação ==
+
+note over apoio : Faz uma requisição qualquer\n(agenda, check-in, etc.)
+
+apoio -> clientA : Navega para página de agenda do Titular
+activate clientA
+
+clientA -> bff : GET /api/v1/agenda/events?titularId=...\nAuthorization: Bearer {JWT Apoio — ainda válido!}
+activate bff
+
+note over bff
+  JWT ainda não expirou (válido 15min).
+  BFF verifica sessão no Redis:
+  session:{apoioId}:active = NOT FOUND
+  → Sessão inválida — rejeita a requisição
+end note
+
+bff --> clientA : HTTP 401 Unauthorized\n{code: SESSION_REVOKED\nmessage: "Sua sessão foi encerrada"}
+deactivate bff
+
+clientA --> apoio : Redireciona para tela de login\ncom aviso de sessão encerrada
+deactivate clientA
+
+@enduml

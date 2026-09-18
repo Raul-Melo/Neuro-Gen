@@ -1,0 +1,275 @@
+@startuml DER-Schema-Core
+
+!theme plain
+skinparam EntityBorderColor #2E7D32
+skinparam EntityBackgroundColor #F1F8E9
+skinparam EntityFontSize 13
+skinparam ArrowColor #2E7D32
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+skinparam linetype ortho
+
+title <b>DER — Schema: ng_core</b>\nNeuro-Gen · Dados Operacionais\nPostgreSQL 16 — banco: ng_core_db
+
+note as N_CORE
+  Schema: ng_core
+  Dados funcionais do produto — não contêm dado sensível de saúde.
+  Apoio pode acessar subconjunto conforme PermissionMatrix do vínculo.
+  FK para ng_identity.ng_users referenciadas por UUID (cross-schema).
+end note
+
+' ============================================================
+' ng_support_links — Vínculos Titular/Apoio.
+' invite_token_hash: SHA-256 do token (nunca o token em si).
+' status: PENDING | ACTIVE | REVOKED | EXPIRED
+' ============================================================
+entity "ng_support_links" as links {
+    * id : uuid <<PK>>
+    --
+    * titular_id : uuid <<FK→ng_users>>
+    apoio_id : uuid <<FK→ng_users>>
+    * invite_token_hash : varchar(64) <<UNIQUE>>
+    * invite_expires_at : timestamptz
+    * status : varchar(20)
+    accepted_at : timestamptz
+    revoked_at : timestamptz
+    * created_at : timestamptz
+    * updated_at : timestamptz
+}
+
+note right of links
+  apoio_id NULL enquanto status=PENDING.
+  invite_token_hash = SHA-256(token).
+  Revogação: SET status=REVOKED,
+  revoked_at=NOW() (efeito < 5s — RF-01.4)
+end note
+
+' ============================================================
+' ng_link_permissions — Permissões granulares por vínculo.
+' Cada linha = um módulo liberado para aquele vínculo.
+' Ausência de linha = acesso negado (opt-in — RF-01.3).
+' ============================================================
+entity "ng_link_permissions" as link_perms {
+    * id : uuid <<PK>>
+    --
+    * link_id : uuid <<FK>>
+    * module_name : varchar(40)
+    * granted_by : uuid <<FK→ng_users>>
+    * granted_at : timestamptz
+}
+
+note right of link_perms
+  Módulos possíveis:
+  AGENDA, EMOTIONAL_CHECKIN, JOURNAL,
+  FOCUS_HISTORY, ORGANIZATION,
+  PROGRESS_REPORTS, SEND_REMINDERS.
+  VAULT propositalmente ausente (RF-08.5).
+end note
+
+' ============================================================
+' ng_user_profiles — Perfil de preferências.
+' PK = user_id (1:1 com ng_users).
+' neurodivergence_profile[]: array, nunca obrigatório.
+' ============================================================
+entity "ng_user_profiles" as profiles {
+    * id : uuid <<PK, FK→ng_users>>
+    --
+    display_name : varchar(100)
+    * timezone : varchar(50)
+    * locale : varchar(10)
+    neurodivergence_profile : varchar[]
+    prefer_not_inform_profile : boolean
+    sensory_preferences : jsonb
+    * onboarding_completed : boolean
+    * created_at : timestamptz
+    * updated_at : timestamptz
+}
+
+' ============================================================
+' ng_categories — Categorias visuais de eventos e tarefas.
+' Criadas pelo próprio usuário (RF-02.5).
+' ============================================================
+entity "ng_categories" as categories {
+    * id : uuid <<PK>>
+    --
+    * user_id : uuid <<FK→ng_users>>
+    * name : varchar(60)
+    * color : char(7)
+    * icon : varchar(50)
+    * created_at : timestamptz
+    * updated_at : timestamptz
+}
+
+note right of categories
+  color: hex #RRGGBB.
+  Predefinidas + customizáveis
+  pelo usuário (RF-02.5).
+end note
+
+' ============================================================
+' ng_events — Compromissos com hora fixa.
+' rrule: RFC 5545 (ex: FREQ=WEEKLY;BYDAY=MO).
+' shared_with_support: visível para Apoio com permissão AGENDA.
+' ============================================================
+entity "ng_events" as events {
+    * id : uuid <<PK>>
+    --
+    * owner_id : uuid <<FK→ng_users>>
+    * title : varchar(200)
+    description : text
+    * start_at : timestamptz
+    * end_at : timestamptz
+    * event_type : varchar(20)
+    rrule : varchar(500)
+    category_id : uuid <<FK>>
+    * shared_with_support : boolean
+    * created_at : timestamptz
+    * updated_at : timestamptz
+    cancelled_at : timestamptz
+}
+
+' ============================================================
+' ng_tasks — Tarefas sem horário fixo.
+' status: PENDING | IN_PROGRESS | DONE | ARCHIVED
+' priority: LOW | MEDIUM | HIGH | CRITICAL
+' ============================================================
+entity "ng_tasks" as tasks {
+    * id : uuid <<PK>>
+    --
+    * owner_id : uuid <<FK→ng_users>>
+    * title : varchar(200)
+    description : text
+    * status : varchar(20)
+    * priority : varchar(20)
+    due_date : date
+    category_id : uuid <<FK>>
+    * shared_with_support : boolean
+    * created_at : timestamptz
+    * updated_at : timestamptz
+    archived_at : timestamptz
+}
+
+' ============================================================
+' ng_subtasks — Subtarefas filhas de ng_tasks.
+' position: ordenação manual via drag (RF-06.6).
+' ============================================================
+entity "ng_subtasks" as subtasks {
+    * id : uuid <<PK>>
+    --
+    * task_id : uuid <<FK>>
+    * title : varchar(200)
+    * done : boolean
+    * position : int
+    completed_at : timestamptz
+    * created_at : timestamptz
+}
+
+' ============================================================
+' ng_reminders — Lembretes vinculados a eventos ou tarefas.
+' event_id XOR task_id: exatamente um dos dois preenchido.
+' persistent=true: ativa comportamento nudge (RF-03.2).
+' ============================================================
+entity "ng_reminders" as reminders {
+    * id : uuid <<PK>>
+    --
+    event_id : uuid <<FK>>
+    task_id : uuid <<FK>>
+    * minutes_before : int
+    * persistent : boolean
+    repeat_interval_min : int
+    max_repetitions : int
+    * current_repetitions : int
+    * status : varchar(40)
+    next_fire_at : timestamptz
+    confirmation_at : timestamptz
+    * created_at : timestamptz
+}
+
+note right of reminders
+  status: SCHEDULED | SENT | CONFIRMED
+         | EXPIRED | UNCONFIRMED_LIMIT_REACHED
+  CHECK: (event_id IS NOT NULL) XOR
+         (task_id IS NOT NULL)
+end note
+
+' ============================================================
+' ng_focus_sessions — Sessões de foco (RF-04).
+' effective_seconds = tempo total − soma das pausas.
+' ============================================================
+entity "ng_focus_sessions" as focus {
+    * id : uuid <<PK>>
+    --
+    * user_id : uuid <<FK→ng_users>>
+    task_id : uuid <<FK>>
+    * planned_minutes : int
+    * break_minutes : int
+    * status : varchar(20)
+    * started_at : timestamptz
+    ended_at : timestamptz
+    * effective_seconds : bigint
+    * created_at : timestamptz
+    * updated_at : timestamptz
+}
+
+' ============================================================
+' ng_focus_pauses — Pausas de uma sessão de foco.
+' resumed_at NULL enquanto pausa ativa.
+' ============================================================
+entity "ng_focus_pauses" as pauses {
+    * id : uuid <<PK>>
+    --
+    * session_id : uuid <<FK>>
+    * paused_at : timestamptz
+    resumed_at : timestamptz
+}
+
+' ============================================================
+' ng_notification_channels — Canais de entrega.
+' channel_type: PUSH | EMAIL | SMS
+' silence_start/end: janela de silêncio (RF-03.8).
+' ============================================================
+entity "ng_notification_channels" as notif_ch {
+    * id : uuid <<PK>>
+    --
+    * user_id : uuid <<FK→ng_users>>
+    * channel_type : varchar(10)
+    * endpoint : varchar(500)
+    * active : boolean
+    silence_start : time
+    silence_end : time
+    * created_at : timestamptz
+    * updated_at : timestamptz
+}
+
+' ============================================================
+' ng_notification_logs — Histórico de notificações enviadas.
+' Últimos 30 dias disponíveis na Central (RF-03.7).
+' ============================================================
+entity "ng_notification_logs" as notif_log {
+    * id : uuid <<PK>>
+    --
+    * user_id : uuid <<FK→ng_users>>
+    reminder_id : uuid <<FK>>
+    * channel_type : varchar(10)
+    * status : varchar(20)
+    sent_at : timestamptz
+    delivered_at : timestamptz
+    confirmed_at : timestamptz
+    failure_reason : varchar(255)
+    * created_at : timestamptz
+}
+
+' Relacionamentos
+links ||--o{ link_perms : "tem permissões (1:N)"
+profiles ||--|| links : "usuário possui (1:1)"
+
+categories ||--o{ events : "categoriza (0:N)"
+categories ||--o{ tasks : "categoriza (0:N)"
+events ||--o{ reminders : "tem (0:N)"
+tasks ||--o{ reminders : "tem (0:N)"
+tasks ||--o{ subtasks : "tem (0:N)"
+tasks ||--o{ focus : "é vinculada por (0:N)"
+focus ||--o{ pauses : "tem (0:N)"
+reminders ||--o{ notif_log : "gera (0:N)"
+
+@enduml

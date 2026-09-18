@@ -1,0 +1,395 @@
+@startuml Module-Agenda
+
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam ClassBorderColor #3D6B9E
+skinparam ClassBackgroundColor #EDF4FD
+skinparam ClassStereotypeFontColor #3D6B9E
+skinparam ClassFontSize 13
+skinparam ArrowColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+skinparam EnumBackgroundColor #FFF8E1
+skinparam EnumBorderColor #F9A825
+skinparam linetype ortho
+
+title <b>Módulo: Agenda</b>\nNeuro-Gen · Eventos (hora fixa) + Tarefas (flexíveis) + Lembretes
+
+package "domain" #EDF4FD {
+
+    ' ============================================================
+    ' Event — Aggregate Root para compromissos com hora fixa.
+    ' Recorrência editada sempre exige scope ao usuário (RF-02).
+    ' Apoio visualiza somente itens shared + permissão AGENDA.
+    ' ============================================================
+    class Event <<aggregate>> {
+        - id : EventId
+        - ownerId : UserId
+        - title : String
+        - description : String
+        - timeRange : TimeRange
+        - type : EventType
+        - recurrenceRule : RRule
+        - reminders : List<Reminder>
+        - categoryId : CategoryId
+        - sharedWithSupport : boolean
+        - audit : AuditMetadata
+        + {static} create(cmd : CreateEventCommand) : Event
+        + reschedule(newRange : TimeRange, scope : RecurrenceEditScope) : void
+        + cancel(scope : RecurrenceEditScope) : void
+        + addReminder(reminder : Reminder) : void
+        + removeReminder(reminderId : UUID) : void
+    }
+
+    ' ============================================================
+    ' Task — Aggregate Root para tarefas sem horário fixo.
+    ' completionPercentage calculado pelas subtarefas filhas.
+    ' ============================================================
+    class Task <<aggregate>> {
+        - id : TaskId
+        - ownerId : UserId
+        - title : String
+        - description : String
+        - status : TaskStatus
+        - priority : Priority
+        - dueDate : LocalDate
+        - subtasks : List<Subtask>
+        - reminders : List<Reminder>
+        - categoryId : CategoryId
+        - sharedWithSupport : boolean
+        - audit : AuditMetadata
+        + {static} create(cmd : CreateTaskCommand) : Task
+        + complete() : void
+        + archive() : void
+        + reopen() : void
+        + addSubtask(title : String) : void
+        + completeSubtask(subtaskId : UUID) : void
+        + completionPercentage() : int
+        ' completionPercentage = (done / total) * 100
+    }
+
+    ' ============================================================
+    ' Subtask — Entidade filha de Task (não é aggregate próprio).
+    ' Consistência gerenciada inteiramente pela Task-mãe.
+    ' ============================================================
+    class Subtask {
+        - id : UUID
+        - title : String
+        - done : boolean
+        - position : int
+        + complete() : void
+        + reopen() : void
+        + reorder(newPosition : int) : void
+    }
+
+    ' ============================================================
+    ' Reminder — Entidade de lembrete vinculada a Event ou Task.
+    ' Nudge (persistent=true): repete a cada repeatIntervalMinutes
+    ' até maxRepetitions ou até confirmação. (RF-03.2)
+    ' ============================================================
+    class Reminder {
+        - id : UUID
+        - trigger : ReminderTrigger
+        - persistent : boolean
+        - repeatIntervalMinutes : int
+        - maxRepetitions : int
+        - currentRepetitions : int
+        - status : ReminderStatus
+        - nextFireAt : Instant
+        + schedule(baseTime : Instant) : void
+        + confirm(confirmedAt : Instant) : void
+        + markSent() : void
+        + shouldRepeat() : boolean
+        ' shouldRepeat: persistent && currentRep < maxRep
+    }
+
+    ' ============================================================
+    ' TimeRange — VO para intervalo de tempo.
+    ' Valida start < end no construtor — sem setter.
+    ' ============================================================
+    class TimeRange <<valueobject>> {
+        - start : Instant
+        - end : Instant
+        + TimeRange(start : Instant, end : Instant)
+        + duration() : Duration
+        + overlaps(other : TimeRange) : boolean
+        + isInFuture() : boolean
+    }
+
+    ' ============================================================
+    ' RRule — VO para regra de recorrência RFC 5545.
+    ' Ex: "FREQ=WEEKLY;BYDAY=MO,WE,FR"
+    ' Lança InvalidRecurrenceRuleException se string inválida.
+    ' ============================================================
+    class RRule <<valueobject>> {
+        - rfc5545String : String
+        + RRule(rfc5545String : String)
+        + nextOccurrences(from : Instant, count : int) : List<Instant>
+        + hasEndDate() : boolean
+    }
+
+    ' ============================================================
+    ' ReminderTrigger — VO para offset relativo ao evento.
+    ' minutesBefore=0 significa "no momento do evento".
+    ' ============================================================
+    class ReminderTrigger <<valueobject>> {
+        - minutesBefore : int
+        + ReminderTrigger(minutesBefore : int)
+        + resolveFor(eventTime : Instant) : Instant
+    }
+
+    class EventId <<valueobject>> {
+        - value : UUID
+        + {static} generate() : EventId
+    }
+
+    class TaskId <<valueobject>> {
+        - value : UUID
+        + {static} generate() : TaskId
+    }
+
+    class CategoryId <<valueobject>> {
+        - value : UUID
+        + {static} of(id : String) : CategoryId
+    }
+
+    ' ============================================================
+    ' TaskStatus — Estado de progresso da tarefa.
+    ' ============================================================
+    enum TaskStatus {
+        PENDING
+        IN_PROGRESS
+        DONE
+        ARCHIVED
+    }
+
+    ' ============================================================
+    ' Priority — Prioridade da tarefa usada para ordenação e filtro.
+    ' ============================================================
+    enum Priority {
+        LOW
+        MEDIUM
+        HIGH
+        CRITICAL
+    }
+
+    enum EventType {
+        APPOINTMENT
+        ' Compromisso externo: consulta, reunião
+        PERSONAL
+        ' Bloco pessoal: time-blocking
+        ROUTINE
+        ' Gerado a partir de RoutineTemplate
+    }
+
+    ' ============================================================
+    ' ReminderStatus — Estado do ciclo de vida do lembrete.
+    ' UNCONFIRMED_LIMIT_REACHED: atingiu max sem confirmação.
+    ' O item é marcado no dashboard do usuário. (RF-03.2)
+    ' ============================================================
+    enum ReminderStatus {
+        SCHEDULED
+        SENT
+        CONFIRMED
+        EXPIRED
+        UNCONFIRMED_LIMIT_REACHED
+    }
+
+    ' ============================================================
+    ' RecurrenceEditScope — Obrigatório ao editar item recorrente.
+    ' O sistema SEMPRE pergunta ao usuário qual escopo aplicar.
+    ' Evita ambiguidade e edição em massa acidental. (RF-02)
+    ' ============================================================
+    enum RecurrenceEditScope {
+        THIS_OCCURRENCE
+        THIS_AND_FUTURE
+        ALL_OCCURRENCES
+    }
+
+    ' Exceções de domínio
+    class EventNotFoundException {
+        ' HTTP 404
+    }
+    class TaskNotFoundException {
+        ' HTTP 404
+    }
+    class InvalidRecurrenceRuleException {
+        - invalidRule : String
+        ' HTTP 400 — RRULE string malformada
+    }
+
+    interface EventRepository {
+        + save(event : Event) : Event
+        + findById(id : EventId) : Optional<Event>
+        + findByOwnerAndPeriod(owner : UserId, from : Instant, to : Instant) : List<Event>
+        + delete(id : EventId) : void
+    }
+
+    interface TaskRepository {
+        + save(task : Task) : Task
+        + findById(id : TaskId) : Optional<Task>
+        + findByOwnerAndStatus(owner : UserId, status : TaskStatus) : List<Task>
+        + delete(id : TaskId) : void
+    }
+}
+
+package "application" #F3F8FF {
+
+    class CreateEventCommand <<record>> {
+        + ownerId : String
+        + title : String
+        + description : String
+        + startAt : Instant
+        + endAt : Instant
+        + rrule : String
+        + categoryId : String
+        + sharedWithSupport : boolean
+        + reminders : List<CreateReminderCommand>
+    }
+
+    class CreateTaskCommand <<record>> {
+        + ownerId : String
+        + title : String
+        + description : String
+        + priority : String
+        + dueDate : LocalDate
+        + categoryId : String
+        + reminders : List<CreateReminderCommand>
+    }
+
+    class CreateReminderCommand <<record>> {
+        + minutesBefore : int
+        + persistent : boolean
+        + repeatIntervalMinutes : int
+        + maxRepetitions : int
+    }
+
+    class EventResult <<record>> {
+        + id : String
+        + title : String
+        + startAt : String
+        + endAt : String
+        + eventType : String
+        + rrule : String
+        + categoryId : String
+        + sharedWithSupport : boolean
+        + reminders : List<ReminderResult>
+    }
+
+    class TaskResult <<record>> {
+        + id : String
+        + title : String
+        + status : String
+        + priority : String
+        + dueDate : String
+        + completionPercentage : int
+        + subtasks : List<SubtaskResult>
+        + reminders : List<ReminderResult>
+    }
+
+    class ReminderResult <<record>> {
+        + id : String
+        + minutesBefore : int
+        + persistent : boolean
+        + status : String
+    }
+
+    class SubtaskResult <<record>> {
+        + id : String
+        + title : String
+        + done : boolean
+        + position : int
+    }
+}
+
+package "api" #F0FFF0 {
+
+    class CreateEventRequest <<record>> {
+        + title : String
+        + description : String
+        + startAt : String
+        + endAt : String
+        + rrule : String
+        + categoryId : String
+        + sharedWithSupport : boolean
+        + reminders : List<ReminderRequest>
+        ' @NotBlank · @NotNull startAt/endAt
+    }
+
+    class EventResponse <<record>> {
+        + id : String
+        + title : String
+        + startAt : String
+        + endAt : String
+        + eventType : String
+        + recurrence : String
+        + categoryName : String
+        + sharedWithSupport : boolean
+        + reminders : List<ReminderResponse>
+    }
+
+    class CreateTaskRequest <<record>> {
+        + title : String
+        + description : String
+        + priority : String
+        + dueDate : String
+        + categoryId : String
+        + reminders : List<ReminderRequest>
+    }
+
+    class TaskResponse <<record>> {
+        + id : String
+        + title : String
+        + status : String
+        + priority : String
+        + dueDate : String
+        + completionPercentage : int
+        + subtasks : List<SubtaskResponse>
+        + reminders : List<ReminderResponse>
+    }
+
+    class ReminderRequest <<record>> {
+        + minutesBefore : int
+        + persistent : boolean
+        + repeatIntervalMinutes : int
+        + maxRepetitions : int
+        ' @Min(0) minutesBefore
+        ' @Min(1) repeatIntervalMinutes se persistent
+    }
+
+    class ReminderResponse <<record>> {
+        + id : String
+        + minutesBefore : int
+        + persistent : boolean
+        + status : String
+    }
+
+    class SubtaskResponse <<record>> {
+        + id : String
+        + title : String
+        + done : boolean
+        + position : int
+    }
+}
+
+' Relações estruturais
+Event *-- TimeRange
+Event *-- RRule : recurrenceRule (nullable)
+Event "1" *-- "0..*" Reminder : reminders
+Event *-- EventId
+Event *-- CategoryId
+Task "1" *-- "0..*" Subtask : subtasks
+Task "1" *-- "0..*" Reminder : reminders
+Task *-- TaskId
+Task *-- CategoryId
+Reminder *-- ReminderTrigger
+Reminder --> ReminderStatus
+Task --> TaskStatus
+Task --> Priority
+Event --> EventType
+
+EventNotFoundException --|> NotFoundException
+TaskNotFoundException --|> NotFoundException
+InvalidRecurrenceRuleException --|> DomainException
+
+@enduml

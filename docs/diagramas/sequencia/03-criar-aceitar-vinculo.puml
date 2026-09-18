@@ -1,0 +1,146 @@
+@startuml SEQ-Criar-Aceitar-Vinculo
+
+!theme plain
+skinparam sequenceArrowThickness 2
+skinparam sequenceParticipantBorderColor #3D6B9E
+skinparam sequenceParticipantBackgroundColor #EDF4FD
+skinparam sequenceActorBorderColor #1A237E
+skinparam sequenceActorBackgroundColor #E8EAF6
+skinparam sequenceLifeLineBorderColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>SEQ-03: Criação e Aceite de Vínculo Titular/Apoio</b>\nNeuro-Gen · RF-01.2, RF-01.3, RF-01.5, RF-01.12\nConvite TTL 72h · Permissões vazias ao aceitar (opt-in)
+
+actor "Titular" as titular
+actor "Apoio" as apoio
+participant "Client\n(Titular)" as clientT
+participant "Client\n(Apoio)" as clientA
+participant "BFF" as bff
+participant "CoreService\n(Link Module)" as core
+participant "CoreDB\n(ng_core)" as db
+
+== Fluxo: Titular Cria Convite ==
+
+titular -> clientT : Clica "Convidar Apoio"
+activate clientT
+
+clientT -> bff : POST /api/v1/links/invite\nAuthorization: Bearer {JWT Titular}
+activate bff
+
+note over bff : Valida JWT\nExtrai titularId dos claims
+
+bff -> core : CreateInviteCommand\n{titularId}
+activate core
+
+note over core
+  SupportLink.createInvite(titularId):
+  1. InviteToken.generate()
+     → token aleatório (64 bytes)
+     → expiresAt = NOW() + 72h
+  2. status = PENDING
+  3. permissions = PermissionMatrix.empty()
+  4. Armazena SHA256(token) no banco
+end note
+
+core -> db : INSERT ng_support_links\n(id, titular_id,\ninvite_token_hash=SHA256(token),\ninvite_expires_at, status=PENDING)
+activate db
+db --> core : OK
+deactivate db
+
+core --> bff : LinkResult\n{linkId, inviteToken, expiresAt}
+deactivate core
+
+bff --> clientT : HTTP 201 Created\n{InviteResponse:\n linkId, inviteToken, inviteUrl, expiresAt}
+deactivate bff
+
+clientT --> titular : Exibe link/QR code para compartilhar
+deactivate clientT
+
+note over titular : Compartilha o link com o Apoio\n(WhatsApp, e-mail, etc.)
+
+== Fluxo: Apoio Aceita o Convite ==
+
+apoio -> clientA : Clica no link de convite
+activate clientA
+
+clientA -> bff : POST /api/v1/links/accept\n{inviteToken}\nAuthorization: Bearer {JWT Apoio}
+activate bff
+
+bff -> core : AcceptInviteCommand\n{rawToken, apoioId}
+activate core
+
+core -> db : SELECT ng_support_links\nWHERE invite_token_hash=SHA256(rawToken)
+activate db
+db --> core : SupportLink ou NOT_FOUND
+deactivate db
+
+alt Token não encontrado
+    core --> bff : throws NotFoundException
+    bff --> clientA : HTTP 404
+    deactivate bff
+    deactivate core
+else Token expirado (expires_at < NOW())
+    core --> bff : throws InviteExpiredException
+    bff --> clientA : HTTP 410 Gone\n{code: INVITE_EXPIRED}
+    deactivate bff
+    deactivate core
+else Token já aceito (status != PENDING)
+    core --> bff : throws InviteAlreadyUsedException
+    bff --> clientA : HTTP 409 Conflict
+    deactivate bff
+    deactivate core
+else Token válido
+    note over core
+      link.accept(apoioId):
+      apoio_id = apoioId
+      status = ACTIVE
+      accepted_at = NOW()
+      permissions: ainda vazio (opt-in)
+      Publica LinkCreated (DomainEvent)
+    end note
+
+    core -> db : UPDATE ng_support_links\nSET apoio_id=?, status=ACTIVE,\naccepted_at=NOW()
+    activate db
+    db --> core : OK
+    deactivate db
+
+    core --> bff : LinkResult\n{status=ACTIVE, grantedPermissions=[]}
+    deactivate core
+
+    bff --> clientA : HTTP 200 OK\n"Vínculo criado! O Titular ainda\nprecisa liberar módulos."
+    deactivate bff
+
+    clientA --> apoio : Dashboard sem acesso a módulos\n(permissões a serem concedidas)
+end
+
+deactivate clientA
+
+== Fluxo: Titular Configura Permissões ==
+
+note over titular : Recebe notificação: "Apoio aceitou o convite"
+
+titular -> clientT : Acessa configurações do vínculo
+activate clientT
+
+clientT -> bff : PATCH /api/v1/links/{linkId}/permissions\n{grant: ["AGENDA", "FOCUS_HISTORY"]}
+activate bff
+
+bff -> core : UpdatePermissionsCommand\n{linkId, titularId, modulesToGrant}
+activate core
+
+core -> db : INSERT ng_link_permissions\n(link_id, module_name=AGENDA, granted_by, granted_at)\nINSERT ng_link_permissions\n(link_id, module_name=FOCUS_HISTORY, ...)
+activate db
+db --> core : OK
+deactivate db
+
+core --> bff : LinkResult\n{permissions=["AGENDA","FOCUS_HISTORY"]}
+deactivate core
+
+bff --> clientT : HTTP 200 OK\n{LinkResponse atualizado}
+deactivate bff
+
+clientT --> titular : Configurações salvas
+deactivate clientT
+
+@enduml

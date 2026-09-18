@@ -1,0 +1,84 @@
+@startuml UC-Focus
+
+!theme plain
+skinparam actorStyle awesome
+skinparam usecaseBorderColor #3D6B9E
+skinparam usecaseBackgroundColor #EDF4FD
+skinparam usecaseFontSize 12
+skinparam actorBorderColor #1A237E
+skinparam actorBackgroundColor #E8EAF6
+skinparam ArrowColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>Casos de Uso — Foco e Produtividade</b>\nNeuro-Gen · EPIC-04 (RF-04)\nSessão de foco suprime notificações não críticas (RF-04.2)
+
+left to right direction
+
+actor "Titular" as titular
+actor "Apoio\n(com permissão FOCUS_HISTORY)" as apoio
+actor "Sistema\n(notification service)" as sistema
+
+rectangle "Sistema: Focus" {
+
+    usecase "Iniciar sessão de foco\n(vincular tarefa opcional)" as UC_START
+    usecase "Pausar sessão\n(acumula tempo)" as UC_PAUSE
+    usecase "Retomar sessão\n(sem perder tempo — RF-04.8)" as UC_RESUME
+    usecase "Finalizar sessão" as UC_COMPLETE
+    usecase "Cancelar sessão" as UC_CANCEL
+    usecase "Ver histórico\nde sessões" as UC_HISTORY
+    usecase "Ver métricas\nde foco efetivo" as UC_METRICS
+    usecase "Ver histórico\ndo Titular (Apoio)" as UC_APOIO_HIST
+
+    ' Ações do Sistema
+    usecase "Suprimir notificações\nnão críticas" as UC_SUPPRESS
+    usecase "Restaurar notificações\napós sessão" as UC_RESTORE
+    usecase "Alertar tempo de tela\ncontinua (RF-04.4)" as UC_SCREEN_ALERT
+}
+
+' Titular
+titular --> UC_START
+titular --> UC_PAUSE
+titular --> UC_RESUME
+titular --> UC_COMPLETE
+titular --> UC_CANCEL
+titular --> UC_HISTORY
+titular --> UC_METRICS
+
+' Apoio
+apoio --> UC_APOIO_HIST
+
+' Sistema
+sistema --> UC_SUPPRESS
+sistema --> UC_RESTORE
+sistema --> UC_SCREEN_ALERT
+
+' Inclusões
+UC_START .> UC_SUPPRESS : <<include>>\n(suprime ao iniciar)
+UC_COMPLETE .> UC_RESTORE : <<include>>\n(restaura ao finalizar)
+UC_CANCEL .> UC_RESTORE : <<include>>\n(restaura ao cancelar)
+
+' Extensões
+UC_METRICS .> UC_APOIO_HIST : <<extend>>\n(Apoio vê versão resumida)
+
+note right of UC_SUPPRESS
+  Notificações críticas continuam
+  sendo entregues normalmente.
+  Não críticas ficam em fila
+  e são entregues ao final. (RF-04.2)
+end note
+
+note right of UC_SCREEN_ALERT
+  Após 90 min sem pausa registrada:
+  sugere parar/pausar. (RF-04.4)
+  Não interrompe a sessão —
+  apenas notifica.
+end note
+
+note bottom of UC_RESUME
+  Retomar sem perder tempo:
+  effectiveTime = accumulatedSeconds
+  menos soma das pausas. (RF-04.8)
+end note
+
+@enduml

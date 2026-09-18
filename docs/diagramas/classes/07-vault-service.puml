@@ -1,0 +1,242 @@
+@startuml Vault-Service
+
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam ClassBorderColor #8B0000
+skinparam ClassBackgroundColor #FFF0F0
+skinparam ClassStereotypeFontColor #8B0000
+skinparam ClassFontSize 13
+skinparam ArrowColor #8B0000
+skinparam NoteBackgroundColor #FFF3CD
+skinparam NoteBorderColor #856404
+skinparam EnumBackgroundColor #FFF8E1
+skinparam EnumBorderColor #F9A825
+skinparam linetype ortho
+
+title <b>Vault Service (Serviço Isolado — Zero-Knowledge)</b>\nNeuro-Gen · ADR-005 · RNF-SEC.3 · RF-08\nServiço Java separado — banco PostgreSQL próprio — mTLS obrigatório
+
+note as N_VAULT
+  ⚠️  ZERO-KNOWLEDGE
+  O servidor NUNCA vê texto claro.
+  Chave derivada com Argon2id NO CLIENTE.
+  Apenas payload cifrado trafega e é persistido.
+  Conta Apoio: sem rota de acesso — hard-coded.
+  Banco PostgreSQL fisicamente separado do Core DB.
+end note
+
+package "domain" #FFF0F0 {
+
+    ' ============================================================
+    ' VaultEntry — Aggregate Root. Contém apenas dado cifrado.
+    ' Servidor armazena e devolve ciphertext — não pode ler.
+    ' Decriptação acontece EXCLUSIVAMENTE no dispositivo do usuário.
+    ' ============================================================
+    class VaultEntry <<aggregate>> {
+        - id : VaultEntryId
+        - ownerId : UserId
+        - label : String
+        - payload : EncryptedPayload
+        - entryType : VaultEntryType
+        - audit : AuditMetadata
+        + {static} create(cmd : CreateVaultEntryCommand) : VaultEntry
+        + update(label : String, newPayload : EncryptedPayload) : void
+        + delete() : void
+    }
+
+    ' ============================================================
+    ' EncryptedPayload — VO para conteúdo cifrado AES-256-GCM.
+    ' ciphertext: bytes cifrados
+    ' iv: nonce/vetor de inicialização (16 bytes)
+    ' salt: usado na derivação de chave com Argon2id no cliente
+    ' O VO nunca processa o conteúdo — apenas transporta bytes.
+    ' ============================================================
+    class EncryptedPayload <<valueobject>> {
+        - ciphertext : byte[]
+        - iv : byte[]
+        - salt : byte[]
+        + EncryptedPayload(ciphertext, iv, salt)
+        + toBase64Json() : String
+        + {static} fromBase64Json(json : String) : EncryptedPayload
+        ' Nunca interpreta o conteúdo — opaque transport
+    }
+
+    note right of EncryptedPayload
+      Fluxo de criptografia (no CLIENTE):
+      1. masterPassword → Argon2id(salt, params) → chaveAES
+      2. AES-256-GCM(content, chaveAES, iv) → ciphertext
+      3. {ciphertext, iv, salt} → Base64JSON → servidor
+      A chaveAES NUNCA sai do dispositivo.
+    end note
+
+    ' ============================================================
+    ' MasterKeyMeta — Parâmetros Argon2id para derivação de chave.
+    ' NUNCA armazena a chave derivada ou a senha mestra em texto.
+    ' recoveryKeyHash: SHA-256(chave de recuperação gerada no setup).
+    ' Permite verificar a chave de recuperação sem armazená-la.
+    ' ============================================================
+    class MasterKeyMeta <<valueobject>> {
+        - argon2Params : String
+        - recoveryKeyHash : String
+        - configuredAt : Instant
+        + MasterKeyMeta(argon2Params, recoveryKeyHash)
+        + verifyRecoveryKey(providedKey : String) : boolean
+        ' verifyRecoveryKey: SHA-256(providedKey) == recoveryKeyHash
+    }
+
+    note bottom of MasterKeyMeta
+      Armazenado:
+        argon2Params: "m=19456,t=2,p=1"
+        recoveryKeyHash: SHA-256 da chave de recuperação
+      NÃO armazenado:
+        senha mestra, chave AES derivada, texto claro
+      Sem a recovery key: dados irrecuperáveis (RF-08.11)
+    end note
+
+    class VaultEntryId <<valueobject>> {
+        - value : UUID
+        + {static} generate() : VaultEntryId
+        + value() : UUID
+    }
+
+    ' ============================================================
+    ' VaultEntryType — Hint de tipo para renderização no cliente.
+    ' O servidor não interpreta o conteúdo — apenas usa o tipo
+    ' para retornar o ícone/layout correto ao cliente.
+    ' ============================================================
+    enum VaultEntryType {
+        LOGIN_CREDENTIAL
+        ' Login + senha + URL
+        SECURE_NOTE
+        ' Texto livre
+        CREDIT_CARD
+        ' Dados de cartão (campos cifrados)
+        API_KEY
+        ' Chave de API ou token de serviço
+        CUSTOM
+        ' Campos personalizados pelo usuário
+    }
+
+    ' Exceções de domínio do Vault Service
+    class VaultSessionExpiredException {
+        ' HTTP 401 — sessão do Cofre expirou.
+        ' Auto-lock após N minutos de inatividade (RF-08.6, padrão 5min).
+        ' Requer nova autenticação com senha mestra.
+    }
+    class InvalidMasterKeyException {
+        ' HTTP 401 — senha mestra incorreta.
+        ' Contabiliza tentativas (rate limit RNF-SEC.6).
+    }
+    class VaultEntryNotFoundException {
+        ' HTTP 404
+    }
+    class ApoioVaultAccessAttemptException {
+        ' HTTP 403 — tentativa de acesso ao Vault por conta Apoio.
+        ' SEMPRE registrada em ng_vault_auth_logs (RNF-SEC.8).
+        ' Indica ataque ou bug crítico — não deve ocorrer normalmente.
+    }
+    class RecoveryKeyInvalidException {
+        ' HTTP 401 — chave de recuperação inválida (RF-08.11)
+    }
+
+    note right of ApoioVaultAccessAttemptException
+      Esta exceção não deveria ser lançada
+      em operação normal. A restrição é
+      aplicada no BFF/Gateway ANTES de
+      chegar ao VaultService (ADR-005).
+      Se for lançada: alerta de segurança
+      imediato (RNF-OBS.5).
+    end note
+
+    ' Porta de saída
+    interface VaultRepository {
+        + save(entry : VaultEntry) : VaultEntry
+        + findById(id : VaultEntryId) : Optional<VaultEntry>
+        + findByOwnerId(ownerId : UserId) : List<VaultEntry>
+        + delete(id : VaultEntryId) : void
+        + deleteAllByOwnerId(ownerId : UserId) : void
+        ' deleteAllByOwnerId: exclusão irreversível ao excluir conta (RNF-RET.2)
+    }
+}
+
+package "application" #FFEEEE {
+
+    class OpenVaultCommand <<record>> {
+        + userId : String
+        + masterPasswordHash : String
+        ' masterPasswordHash: derivado com Argon2id NO CLIENTE.
+        ' Servidor verifica hash, nunca vê a senha em texto plano.
+    }
+
+    class CreateVaultEntryCommand <<record>> {
+        + userId : String
+        + label : String
+        + encryptedPayloadBase64Json : String
+        + entryType : String
+        ' Payload já cifrado no cliente — servidor armazena opaquely.
+    }
+
+    class RecoverVaultCommand <<record>> {
+        + userId : String
+        + recoveryKey : String
+        + newMasterPasswordHash : String
+        ' recoveryKey: exibida UMA ÚNICA VEZ no setup (RF-08.11)
+    }
+
+    class VaultEntryResult <<record>> {
+        + id : String
+        + label : String
+        + entryType : String
+        + encryptedPayloadBase64Json : String
+        + createdAt : String
+        + updatedAt : String
+        ' Cliente decifra localmente — servidor não interpreta.
+    }
+
+    class VaultSessionResult <<record>> {
+        + vaultSessionToken : String
+        + expiresIn : long
+        ' Token de curta duração (5min padrão — RF-08.6)
+    }
+}
+
+package "api" #FFEEEE {
+
+    class OpenVaultRequest <<record>> {
+        + masterPasswordHash : String
+        ' Derivado com Argon2id no cliente ANTES de enviar
+    }
+
+    class VaultSessionResponse <<record>> {
+        + vaultSessionToken : String
+        + expiresInSeconds : long
+    }
+
+    class CreateVaultEntryRequest <<record>> {
+        + label : String
+        + entryType : String
+        + encryptedPayload : String
+        ' Base64JSON já cifrado no cliente
+        ' @NotBlank label, entryType, encryptedPayload
+    }
+
+    class VaultEntryResponse <<record>> {
+        + id : String
+        + label : String
+        + entryType : String
+        + encryptedPayload : String
+        + updatedAt : String
+    }
+}
+
+' Relações
+VaultEntry *-- EncryptedPayload
+VaultEntry *-- VaultEntryId
+VaultEntry --> VaultEntryType
+
+VaultSessionExpiredException --|> DomainException
+InvalidMasterKeyException --|> DomainException
+VaultEntryNotFoundException --|> NotFoundException
+ApoioVaultAccessAttemptException --|> ForbiddenAccessException
+RecoveryKeyInvalidException --|> DomainException
+
+@enduml

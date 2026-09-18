@@ -1,0 +1,78 @@
+@startuml UC-Onboarding
+
+!theme plain
+skinparam actorStyle awesome
+skinparam usecaseBorderColor #3D6B9E
+skinparam usecaseBackgroundColor #EDF4FD
+skinparam usecaseFontSize 12
+skinparam actorBorderColor #1A237E
+skinparam actorBackgroundColor #E8EAF6
+skinparam ArrowColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>Casos de Uso — Onboarding e Perfil de Neurodivergência</b>\nNeuro-Gen · EPIC-10 (RF-10)\nPerfil NUNCA restringe funcionalidades — apenas sugere defaults
+
+left to right direction
+
+actor "Titular" as titular
+actor "Sistema" as sistema
+
+rectangle "Sistema: Onboarding e Perfil" {
+
+    usecase "Declarar perfil de\nneurodivergência (RF-10.1)" as UC_DECLARE
+    usecase "Pular onboarding\n(configurar depois)" as UC_SKIP
+    usecase "Receber sugestões\nde configuração inicial" as UC_SUGGEST
+    usecase "Aceitar sugestões\nautomaticamente" as UC_ACCEPT_SUGG
+    usecase "Ignorar sugestões\n(override manual)" as UC_IGNORE
+    usecase "Alterar perfil\ndeclarado (RF-10.4)" as UC_UPDATE
+    usecase "Reconfigurar sugestões\napós mudança de perfil" as UC_RECONFIG
+    usecase "Ver tooltip contextual\n(primeiro uso de módulo)" as UC_TOOLTIP
+    usecase "Dispensar tooltip\npermanentemente" as UC_DISMISS
+}
+
+' Titular
+titular --> UC_DECLARE
+titular --> UC_SKIP
+titular --> UC_ACCEPT_SUGG
+titular --> UC_IGNORE
+titular --> UC_UPDATE
+titular --> UC_RECONFIG
+titular --> UC_DISMISS
+
+' Sistema
+sistema --> UC_SUGGEST
+sistema --> UC_TOOLTIP
+
+' Relações
+UC_DECLARE .> UC_SUGGEST : <<include>>\n(sistema gera sugestões após declaração)
+UC_UPDATE .> UC_RECONFIG : <<extend>>\n(pode reconfigurar ao alterar perfil)
+UC_TOOLTIP .> UC_DISMISS : <<extend>>\n(usuário pode dispensar)
+
+note right of UC_DECLARE
+  Exemplos de perfil declarado:
+    TDAH → lembretes persistentes
+    ativos por padrão, timer foco
+    TEA → modo baixa densidade +
+    estímulos reduzidos ativados
+    2E → combinação de ambos
+  NUNCA obrigatório — pode pular.
+  (RF-10.1)
+end note
+
+note right of UC_SUGGEST
+  Sugestões aplicadas como defaults:
+  • Visível/ajustável nas configurações
+  • Usuário tem controle total de override
+  • Perfil NÃO restringe funcionalidades
+  (RF-10, RNF-USA.1)
+end note
+
+note bottom of UC_SKIP
+  Onboarding máx. 5 telas.
+  Dispensável a qualquer momento.
+  Retomável nas configurações.
+  (RF-10.3, RNF-USA.6)
+end note
+
+@enduml
