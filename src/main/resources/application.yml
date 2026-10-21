@@ -1,0 +1,81 @@
+spring:
+  application:
+    name: Neuro-Gen
+
+  # Datasource do Core (schemas ng_identity, ng_core, ng_sensitive)
+  datasource:
+    url: jdbc:postgresql://localhost:5432/neurogen
+    username: neurogen
+    password: secret
+    hikari:
+      pool-name: core-pool
+      maximum-pool-size: 10
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      # O schema é de propriedade exclusiva do Flyway (ADR). Hibernate não cria nem altera.
+      ddl-auto: none
+    properties:
+      hibernate:
+        jdbc.time_zone: UTC
+        format_sql: false
+
+  # Flyway do Core — aplicado ao datasource primário.
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    schemas: ng_identity,ng_core,ng_sensitive
+    default-schema: ng_core
+    create-schemas: true
+
+# Datasource ISOLADO do Vault (ADR-005). Em produção: instância/credenciais separadas.
+vault:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/neurogen
+    username: neurogen
+    password: secret
+    hikari:
+      pool-name: vault-pool
+      maximum-pool-size: 5
+  session:
+    ttl-seconds: 300        # auto-lock após 5 min de inatividade (RF-08.6)
+
+# Configuração da aplicação (JWT, cifra de coluna de dados sensíveis)
+neurogen:
+  security:
+    jwt:
+      issuer: https://neuro-gen.sentinelcorp.com.br
+      access-token-ttl-seconds: 900        # 15 min (access token curto)
+      refresh-token-ttl-seconds: 2592000    # 30 dias (RNF-SEC.7)
+    # Chave AES-256 (Base64, 32 bytes) para cifrar colunas de ng_sensitive (RNF-SEC.2/ADR-006).
+    # Em produção vem de cofre de segredos (RNF-SEC.13), NUNCA do código.
+    sensitive-data-key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    invite:
+      ttl-hours: 72                          # RF-01.2
+    email-verification:
+      ttl-hours: 24
+    password-reset:
+      ttl-minutes: 15                        # RF-01.7
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operationsSorter: method
+    tagsSorter: alpha
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  level:
+    org.springframework.security: INFO
