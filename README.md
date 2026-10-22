@@ -140,8 +140,9 @@ ciclos: `git log --oneline --grep=TDD`. Estratégia completa no **ADR-008**.
 A API roda em contêiner Docker no **Render**, com PostgreSQL 16 gerenciado. Todo merge na `main` com CI
 verde é publicado automaticamente.
 
-- **URL da API:** _preencher após o primeiro deploy_ (ex.: `https://neuro-gen-api.onrender.com`)
-- **Swagger UI:** `<URL>/swagger-ui.html` · **Health:** `<URL>/actuator/health`
+- **URL da API:** https://neuro-gen-api.onrender.com
+- **Swagger UI:** https://neuro-gen-api.onrender.com/swagger-ui.html · **Health:** https://neuro-gen-api.onrender.com/actuator/health
+- Plano gratuito: após 15 min sem uso o serviço hiberna, e o primeiro acesso pode levar alguns minutos.
 - Passo a passo e roteiro de demonstração: [`docs/deploy/README.md`](docs/deploy/README.md)
 
 ## Documentação
