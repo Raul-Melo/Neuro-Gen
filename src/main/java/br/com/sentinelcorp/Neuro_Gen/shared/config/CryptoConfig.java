@@ -10,6 +10,6 @@ public class CryptoConfig {
 
     @Bean
     public AesGcmCipher aesGcmCipher(NeuroGenProperties props) {
-        return AesGcmCipher.fromHexKey(props.getSensitiveDataKey());
+        return AesGcmCipher.fromKey(props.getSensitiveDataKey());
     }
 }
