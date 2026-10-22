@@ -7,6 +7,6 @@ import org.springframework.http.HttpStatus;
 public class EventAlreadyCancelledException extends DomainException {
 
     public EventAlreadyCancelledException(String eventId) {
-        super("", "", HttpStatus.CONFLICT);
+        super("EVENT_ALREADY_CANCELLED", "O evento " + eventId + " já está cancelado", HttpStatus.CONFLICT);
     }
 }

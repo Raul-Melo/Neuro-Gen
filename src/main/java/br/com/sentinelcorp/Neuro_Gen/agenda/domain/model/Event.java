@@ -1,12 +1,15 @@
 package br.com.sentinelcorp.Neuro_Gen.agenda.domain.model;
 
+import br.com.sentinelcorp.Neuro_Gen.agenda.domain.exception.EventAlreadyCancelledException;
 import br.com.sentinelcorp.Neuro_Gen.shared.domain.AggregateRoot;
+import br.com.sentinelcorp.Neuro_Gen.shared.domain.exception.ValidationException;
 import br.com.sentinelcorp.Neuro_Gen.shared.domain.model.AuditMetadata;
 import br.com.sentinelcorp.Neuro_Gen.shared.domain.model.UserId;
 
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /** Aggregate Root para compromissos com hora fixa (Event). */
@@ -45,7 +48,7 @@ public class Event extends AggregateRoot {
     public static Event create(UserId ownerId, String title, String description, TimeRange timeRange,
                                EventType type, RRule recurrenceRule, CategoryId categoryId,
                                boolean sharedWithSupport, List<Reminder> reminders) {
-        Event event = new Event(EventId.generate(), ownerId, title, description, timeRange,
+        Event event = new Event(EventId.generate(), ownerId, validTitle(title), description, timeRange,
                 type == null ? EventType.APPOINTMENT : type, recurrenceRule, reminders, categoryId,
                 sharedWithSupport, null, AuditMetadata.createNow(ownerId.asString()));
         event.reminders.forEach(r -> r.schedule(timeRange.start()));
@@ -62,17 +65,20 @@ public class Event extends AggregateRoot {
 
     public void reschedule(TimeRange newRange, RecurrenceEditScope scope) {
         // scope registra a intenção do usuário (RF-02); séries completas seriam divididas em evolução.
+        requireNotCancelled();
         this.timeRange = newRange;
         this.reminders.forEach(r -> r.schedule(newRange.start()));
         this.audit = audit.touch(ownerId.asString());
     }
 
     public void cancel(RecurrenceEditScope scope) {
+        requireNotCancelled();
         this.cancelledAt = Instant.now();
         this.audit = audit.touch(ownerId.asString());
     }
 
     public void addReminder(Reminder reminder) {
+        requireNotCancelled();
         reminder.schedule(timeRange.start());
         this.reminders.add(reminder);
         this.audit = audit.touch(ownerId.asString());
@@ -81,6 +87,23 @@ public class Event extends AggregateRoot {
     public void removeReminder(UUID reminderId) {
         this.reminders.removeIf(r -> r.id().equals(reminderId));
         this.audit = audit.touch(ownerId.asString());
+    }
+
+    private void requireNotCancelled() {
+        if (isCancelled()) {
+            throw new EventAlreadyCancelledException(id.asString());
+        }
+    }
+
+    private static String validTitle(String title) {
+        if (title == null || title.isBlank()) {
+            throw new ValidationException(Map.of("title", "Título é obrigatório"));
+        }
+        String trimmed = title.strip();
+        if (trimmed.length() > 200) {
+            throw new ValidationException(Map.of("title", "Título deve ter no máximo 200 caracteres"));
+        }
+        return trimmed;
     }
 
     public boolean isCancelled() {
