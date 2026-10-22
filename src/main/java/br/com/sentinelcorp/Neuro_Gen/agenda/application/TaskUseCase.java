@@ -12,11 +12,15 @@ import br.com.sentinelcorp.Neuro_Gen.agenda.domain.model.TaskId;
 import br.com.sentinelcorp.Neuro_Gen.agenda.domain.model.TaskStatus;
 import br.com.sentinelcorp.Neuro_Gen.agenda.domain.port.TaskRepository;
 import br.com.sentinelcorp.Neuro_Gen.shared.domain.exception.ForbiddenAccessException;
+import br.com.sentinelcorp.Neuro_Gen.shared.domain.exception.ValidationException;
 import br.com.sentinelcorp.Neuro_Gen.shared.domain.model.UserId;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 
 /** Use case de tarefas, subtarefas e ciclo de vida (RF-02, RF-06). */
@@ -85,7 +89,7 @@ public class TaskUseCase {
         UserId owner = UserId.of(ownerId);
         List<Task> result = status == null
                 ? tasks.findByOwner(owner)
-                : tasks.findByOwnerAndStatus(owner, TaskStatus.valueOf(status));
+                : tasks.findByOwnerAndStatus(owner, parseStatus(status));
         return result.stream().map(TaskResult::from).toList();
     }
 
@@ -96,6 +100,15 @@ public class TaskUseCase {
             throw new ForbiddenAccessException("Tarefa", "não pertence ao usuário");
         }
         return task;
+    }
+
+    private static TaskStatus parseStatus(String status) {
+        try {
+            return TaskStatus.valueOf(status.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            throw new ValidationException(Map.of("status",
+                    "Status inválido. Valores aceitos: " + Arrays.toString(TaskStatus.values())));
+        }
     }
 
     private static List<Reminder> toReminders(List<ReminderInput> inputs) {
