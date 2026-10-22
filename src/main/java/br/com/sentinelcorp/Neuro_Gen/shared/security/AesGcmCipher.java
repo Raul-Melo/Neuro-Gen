@@ -28,6 +28,11 @@ public final class AesGcmCipher {
         this.key = new SecretKeySpec(key, "AES");
     }
 
+    /** Esqueleto (TDD-RED): aceitará chave em hexadecimal ou Base64. */
+    public static AesGcmCipher fromKey(String key) {
+        throw new UnsupportedOperationException("não implementado");
+    }
+
     /** Constrói a partir de uma chave em hexadecimal (64 caracteres). */
     public static AesGcmCipher fromHexKey(String hexKey) {
         return new AesGcmCipher(hexToBytes(hexKey));
