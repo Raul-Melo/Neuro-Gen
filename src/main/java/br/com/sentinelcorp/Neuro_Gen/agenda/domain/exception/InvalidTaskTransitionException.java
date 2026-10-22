@@ -8,6 +8,8 @@ import org.springframework.http.HttpStatus;
 public class InvalidTaskTransitionException extends DomainException {
 
     public InvalidTaskTransitionException(TaskStatus current, String action) {
-        super("INVALID_TASK_TRANSITION", "", HttpStatus.CONFLICT);
+        super("INVALID_TASK_TRANSITION",
+                "Não é possível " + action + " uma tarefa com status " + current,
+                HttpStatus.CONFLICT);
     }
 }
