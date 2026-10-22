@@ -48,8 +48,9 @@ neurogen:
       issuer: https://neuro-gen.sentinelcorp.com.br
       access-token-ttl-seconds: 900        # 15 min (access token curto)
       refresh-token-ttl-seconds: 2592000    # 30 dias (RNF-SEC.7)
-    # Chave AES-256 (Base64, 32 bytes) para cifrar colunas de ng_sensitive (RNF-SEC.2/ADR-006).
-    # Em produção vem de cofre de segredos (RNF-SEC.13), NUNCA do código.
+    # Chave AES-256 de 32 bytes (hex com 64 caracteres ou Base64) para cifrar colunas de
+    # ng_sensitive (RNF-SEC.2/ADR-006). Valor abaixo é SÓ para desenvolvimento local.
+    # Em produção vem da variável SENSITIVE_DATA_KEY (application-prod.yml), NUNCA do código.
     sensitive-data-key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     invite:
       ttl-hours: 72                          # RF-01.2
