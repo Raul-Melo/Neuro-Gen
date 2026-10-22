@@ -1,0 +1,9 @@
+target/
+.git/
+.github/
+.idea/
+.vscode/
+docs/
+public/
+*.iml
+compose.yaml

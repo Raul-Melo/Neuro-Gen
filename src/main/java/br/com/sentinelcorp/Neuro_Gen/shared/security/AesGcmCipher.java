@@ -28,6 +28,28 @@ public final class AesGcmCipher {
         this.key = new SecretKeySpec(key, "AES");
     }
 
+    /**
+     * Constrói a partir de uma chave de 32 bytes em <b>hexadecimal</b> (64 caracteres, usado em dev)
+     * ou em <b>Base64</b> (formato de geradores de segredo, ex.: {@code openssl rand -base64 32}).
+     */
+    public static AesGcmCipher fromKey(String key) {
+        if (key == null || key.isBlank()) {
+            throw new IllegalArgumentException("A chave AES-256 de dados sensíveis não foi configurada");
+        }
+        String trimmed = key.strip();
+        if (trimmed.length() == 64 && trimmed.chars().allMatch(c -> Character.digit(c, 16) >= 0)) {
+            return fromHexKey(trimmed);
+        }
+        byte[] decoded;
+        try {
+            decoded = Base64.getDecoder().decode(trimmed);
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException(
+                    "A chave AES-256 deve estar em hexadecimal (64 caracteres) ou Base64", ex);
+        }
+        return new AesGcmCipher(decoded);
+    }
+
     /** Constrói a partir de uma chave em hexadecimal (64 caracteres). */
     public static AesGcmCipher fromHexKey(String hexKey) {
         return new AesGcmCipher(hexToBytes(hexKey));

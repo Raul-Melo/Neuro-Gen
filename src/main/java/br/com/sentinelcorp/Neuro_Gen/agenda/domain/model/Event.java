@@ -1,5 +1,6 @@
 package br.com.sentinelcorp.Neuro_Gen.agenda.domain.model;
 
+import br.com.sentinelcorp.Neuro_Gen.agenda.domain.exception.EventAlreadyCancelledException;
 import br.com.sentinelcorp.Neuro_Gen.shared.domain.AggregateRoot;
 import br.com.sentinelcorp.Neuro_Gen.shared.domain.model.AuditMetadata;
 import br.com.sentinelcorp.Neuro_Gen.shared.domain.model.UserId;
@@ -45,7 +46,7 @@ public class Event extends AggregateRoot {
     public static Event create(UserId ownerId, String title, String description, TimeRange timeRange,
                                EventType type, RRule recurrenceRule, CategoryId categoryId,
                                boolean sharedWithSupport, List<Reminder> reminders) {
-        Event event = new Event(EventId.generate(), ownerId, title, description, timeRange,
+        Event event = new Event(EventId.generate(), ownerId, AgendaTitle.validate(title), description, timeRange,
                 type == null ? EventType.APPOINTMENT : type, recurrenceRule, reminders, categoryId,
                 sharedWithSupport, null, AuditMetadata.createNow(ownerId.asString()));
         event.reminders.forEach(r -> r.schedule(timeRange.start()));
@@ -62,17 +63,20 @@ public class Event extends AggregateRoot {
 
     public void reschedule(TimeRange newRange, RecurrenceEditScope scope) {
         // scope registra a intenção do usuário (RF-02); séries completas seriam divididas em evolução.
+        requireNotCancelled();
         this.timeRange = newRange;
         this.reminders.forEach(r -> r.schedule(newRange.start()));
         this.audit = audit.touch(ownerId.asString());
     }
 
     public void cancel(RecurrenceEditScope scope) {
+        requireNotCancelled();
         this.cancelledAt = Instant.now();
         this.audit = audit.touch(ownerId.asString());
     }
 
     public void addReminder(Reminder reminder) {
+        requireNotCancelled();
         reminder.schedule(timeRange.start());
         this.reminders.add(reminder);
         this.audit = audit.touch(ownerId.asString());
@@ -82,6 +86,13 @@ public class Event extends AggregateRoot {
         this.reminders.removeIf(r -> r.id().equals(reminderId));
         this.audit = audit.touch(ownerId.asString());
     }
+
+    private void requireNotCancelled() {
+        if (isCancelled()) {
+            throw new EventAlreadyCancelledException(id.asString());
+        }
+    }
+
 
     public boolean isCancelled() {
         return cancelledAt != null;

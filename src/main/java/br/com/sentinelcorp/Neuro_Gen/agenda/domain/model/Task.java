@@ -1,5 +1,6 @@
 package br.com.sentinelcorp.Neuro_Gen.agenda.domain.model;
 
+import br.com.sentinelcorp.Neuro_Gen.agenda.domain.exception.InvalidTaskTransitionException;
 import br.com.sentinelcorp.Neuro_Gen.shared.domain.AggregateRoot;
 import br.com.sentinelcorp.Neuro_Gen.shared.domain.exception.NotFoundException;
 import br.com.sentinelcorp.Neuro_Gen.shared.domain.model.AuditMetadata;
@@ -8,11 +9,18 @@ import br.com.sentinelcorp.Neuro_Gen.shared.domain.model.UserId;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /** Aggregate Root para tarefas sem horário fixo. Calcula o progresso a partir das subtarefas. */
 public class Task extends AggregateRoot {
+
+    private static final Set<TaskStatus> CAN_COMPLETE = EnumSet.of(TaskStatus.PENDING, TaskStatus.IN_PROGRESS);
+    private static final Set<TaskStatus> CAN_ARCHIVE =
+            EnumSet.of(TaskStatus.PENDING, TaskStatus.IN_PROGRESS, TaskStatus.DONE);
+    private static final Set<TaskStatus> CAN_REOPEN = EnumSet.of(TaskStatus.DONE, TaskStatus.ARCHIVED);
 
     private final TaskId id;
     private final UserId ownerId;
@@ -47,7 +55,7 @@ public class Task extends AggregateRoot {
     public static Task create(UserId ownerId, String title, String description, Priority priority,
                               LocalDate dueDate, CategoryId categoryId, boolean sharedWithSupport,
                               List<Reminder> reminders) {
-        return new Task(TaskId.generate(), ownerId, title, description, TaskStatus.PENDING,
+        return new Task(TaskId.generate(), ownerId, AgendaTitle.validate(title), description, TaskStatus.PENDING,
                 priority == null ? Priority.MEDIUM : priority, dueDate, List.of(), reminders,
                 categoryId, sharedWithSupport, AuditMetadata.createNow(ownerId.asString()));
     }
@@ -61,19 +69,25 @@ public class Task extends AggregateRoot {
     }
 
     public void complete() {
-        this.status = TaskStatus.DONE;
-        this.audit = audit.touch(ownerId.asString());
+        transition(CAN_COMPLETE, TaskStatus.DONE, "concluir");
     }
 
     public void archive() {
-        this.status = TaskStatus.ARCHIVED;
-        this.audit = audit.touch(ownerId.asString());
+        transition(CAN_ARCHIVE, TaskStatus.ARCHIVED, "arquivar");
     }
 
     public void reopen() {
-        this.status = TaskStatus.PENDING;
+        transition(CAN_REOPEN, TaskStatus.PENDING, "reabrir");
+    }
+
+    private void transition(Set<TaskStatus> allowedFrom, TaskStatus target, String action) {
+        if (!allowedFrom.contains(status)) {
+            throw new InvalidTaskTransitionException(status, action);
+        }
+        this.status = target;
         this.audit = audit.touch(ownerId.asString());
     }
+
 
     public Subtask addSubtask(String title) {
         Subtask subtask = Subtask.create(title, subtasks.size());

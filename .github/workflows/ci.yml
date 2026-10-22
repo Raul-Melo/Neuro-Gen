@@ -1,0 +1,60 @@
+# Integração contínua: compila e executa TODA a suíte de testes a cada push e pull request.
+# Inclui o teste de integração com PostgreSQL real (Testcontainers usa o Docker do runner).
+name: CI
+
+on:
+  push:
+    branches: [main, develop, "feature/**"]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build e testes (Java 21)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar JDK 21 (Temurin) com cache do Maven
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Compilar e executar testes (unitários, API e integração)
+        run: ./mvnw -B -ntp verify
+
+      - name: Garantir que o teste de integração realmente executou
+        # disabledWithoutDocker = true faria o teste ser PULADO sem falhar se o Docker não fosse
+        # detectado. Aqui exigimos evidência de execução no relatório do Surefire.
+        run: |
+          REPORT=target/surefire-reports/TEST-br.com.sentinelcorp.Neuro_Gen.NeuroGenIntegrationTest.xml
+          test -f "$REPORT" || { echo "::error::Relatório do teste de integração não encontrado"; exit 1; }
+          grep -q 'skipped="0"' "$REPORT" || { echo "::error::NeuroGenIntegrationTest foi PULADO (Docker não detectado)"; exit 1; }
+          echo "Teste de integração executado com PostgreSQL real."
+
+      - name: Resumo dos testes
+        if: always()
+        run: |
+          echo "### Resultado dos testes" >> "$GITHUB_STEP_SUMMARY"
+          for f in target/surefire-reports/TEST-*.xml; do
+            [ -f "$f" ] || continue
+            name=$(basename "$f" .xml | sed 's/TEST-br.com.sentinelcorp.Neuro_Gen.//')
+            line=$(grep -o '<testsuite [^>]*' "$f" | grep -oE '(tests|failures|errors|skipped)="[0-9]+"' | tr '\n' ' ')
+            echo "- \`$name\`: $line" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Publicar relatórios de teste
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorios-de-teste
+          path: target/surefire-reports/
+          retention-days: 14
