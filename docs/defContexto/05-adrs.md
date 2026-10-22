@@ -170,6 +170,75 @@ Negativas / trade-offs aceitos: joins entre schema operacional e sensível adici
 
 ---
 
+## ADR-007: Implantação em Nuvem — Contêiner Docker em PaaS (Render) com PostgreSQL Gerenciado
+
+**Status:** Aceito (Checkpoint 3)
+
+### Contexto
+O Checkpoint 3 exige os serviços REST implantados em nuvem, acessíveis publicamente para demonstração. O projeto é acadêmico (sem orçamento), o time é pequeno e não há equipe de operações. O backend depende de PostgreSQL 16 com dois datasources lógicos (Core e Vault, ADR-005). Segredos não podem ficar no código (RNF-SEC.13).
+
+### Decisão
+- Empacotar o backend como **imagem Docker** (multi-stage: Maven + JDK 21 para build; JRE 21 Alpine para execução, usuário sem privilégios).
+- Hospedar em **Render** (PaaS), plano gratuito: um *Web Service* Docker e um **PostgreSQL 16 gerenciado** na mesma região (`virginia`, a mais próxima do Brasil entre as disponíveis).
+- Descrever a infraestrutura como código no **Blueprint `render.yaml`**: banco, serviço, variáveis e health check (`/actuator/health`).
+- Configuração de produção no perfil Spring `prod` (`application-prod.yml`), lida **exclusivamente de variáveis de ambiente**; a chave AES-256 dos dados sensíveis é gerada pela plataforma (`generateValue`).
+- **Deploy condicionado ao CI** (`autoDeployTrigger: checksPass`): só é publicado o commit da `main` cujo pipeline do GitHub Actions passou (ADR-008).
+
+### Alternativas Consideradas
+- **AWS / Azure / GCP (IaaS ou contêineres gerenciados):** rejeitado nesta fase — exigem cartão de crédito ou configuração de rede, IAM e banco consideravelmente maior para o prazo do checkpoint. A imagem Docker mantém a migração possível sem reescrita.
+- **Fly.io:** rejeitado — não oferece mais plano gratuito para novos usuários e exige cartão.
+- **Railway / Heroku:** rejeitados — não possuem plano gratuito permanente.
+- **Deploy do JAR direto (sem Docker):** rejeitado — prende o projeto ao *buildpack* do provedor; o contêiner é portável entre provedores e reproduzível localmente.
+
+### Consequências
+Positivas:
+- Deploy de um clique a partir do repositório; URL HTTPS pública com Swagger UI para demonstração.
+- Infraestrutura versionada junto com o código (`render.yaml`, `Dockerfile`).
+- Portabilidade: a mesma imagem roda localmente, no Render ou em qualquer provedor de contêineres.
+- Nenhum segredo de produção no repositório.
+
+Negativas / trade-offs aceitos:
+- Plano gratuito **hiberna após 15 min sem tráfego**; a primeira requisição seguinte espera a aplicação subir novamente (Spring Boot em CPU fracionada leva alguns minutos). Mitigação: acessar a URL antes da apresentação.
+- PostgreSQL gratuito **expira 30 dias** após a criação (com 14 dias de carência). Aceitável para avaliação acadêmica.
+- **Vault no mesmo servidor PostgreSQL** (isolamento lógico por schema e datasource próprios), divergindo do isolamento físico do ADR-005. O perfil `prod` já aceita `VAULT_DB_URL/USERNAME/PASSWORD` para apontar o Cofre a outra instância sem mudança de código.
+- O par de chaves RSA do JWT é gerado em memória a cada inicialização: após hibernar/reiniciar, tokens antigos deixam de valer e é preciso novo login. Evolução: chave persistida em cofre de segredos (RNF-SEC.13).
+
+### Referências
+`render.yaml`, `Dockerfile`, `src/main/resources/application-prod.yml`, `docs/deploy/README.md`, ADR-002, ADR-005, ADR-008.
+
+---
+
+## ADR-008: Estratégia de Qualidade — TDD, Pirâmide de Testes e CI como Portão de Deploy
+
+**Status:** Aceito (Checkpoint 3)
+
+### Contexto
+O Checkpoint 3 exige desenvolvimento com TDD. A arquitetura hexagonal (ADR-001) isola o domínio de frameworks, o que permite testar regras de negócio sem Spring nem banco. É necessário evidenciar o processo (não só o resultado) e impedir que código quebrado chegue à nuvem.
+
+### Decisão
+- **TDD em ciclos explícitos no histórico do Git:** cada comportamento novo começa por um commit `test(...) [TDD-RED]` com testes falhando pelo motivo certo, seguido de `feat/fix(...) [TDD-GREEN]` com a implementação mínima e, quando há duplicação, `refactor(...) [TDD-REFACTOR]`. A mensagem do commit registra o estado da suíte.
+- **Pirâmide de testes:**
+  - *Domínio* (JUnit 5 + AssertJ, sem Spring): invariantes e máquinas de estado dos agregados — rápidos e numerosos.
+  - *Aplicação* (Mockito): casos de uso com as portas de saída simuladas.
+  - *API* (MockMvc standalone): contrato HTTP e tradução de erros pelo `GlobalExceptionHandler`.
+  - *Integração* (Testcontainers + PostgreSQL 16 real): contexto completo, dois datasources, Flyway e o teste de segurança obrigatório do Cofre (RF-08.5).
+- **CI no GitHub Actions** executa toda a pirâmide a cada push e pull request, e **falha se o teste de integração for pulado** (evita "verde falso" quando o Docker não é detectado).
+- O CI é o **portão do deploy**: o Render só publica commits com checks aprovados (ADR-007).
+
+### Alternativas Consideradas
+- **Testes escritos após a implementação:** rejeitado — não atende ao requisito de TDD e tende a testar o que o código faz, não o que deveria fazer.
+- **Somente testes de integração (`@SpringBootTest`):** rejeitado — lentos e dependentes de Docker; feedback demorado desestimula o ciclo red-green.
+- **Banco em memória (H2) nos testes:** rejeitado — diverge do PostgreSQL em tipos, schemas e SQL das migrations Flyway; Testcontainers usa a mesma versão de produção.
+
+### Consequências
+Positivas: regressões detectadas antes do deploy; histórico do Git demonstra o processo TDD; testes de domínio rodam em segundos sem infraestrutura.
+Negativas / trade-offs aceitos: o pipeline completo leva alguns minutos por causa do contêiner PostgreSQL; testes de integração exigem Docker localmente (no CI ele já está disponível).
+
+### Referências
+`.github/workflows/ci.yml`, `src/test/java`, `docs/checkpoint-3/README.md`, ADR-001, ADR-007.
+
+---
+
 ## Resumo da Stack Definida
 
 ```mermaid
@@ -219,3 +288,5 @@ flowchart TB
 | Web | React 18 + TypeScript |
 | Mobile | Kotlin Multiplatform (lógica compartilhada) + Jetpack Compose (Android) + SwiftUI (iOS) |
 | Padrão arquitetural | Monolito modular (Core) + serviços isolados (Vault, Notification) |
+| Implantação (Checkpoint 3) | Docker + Render (PaaS) + PostgreSQL 16 gerenciado — ADR-007 |
+| Qualidade | TDD + JUnit 5/AssertJ/Mockito/MockMvc/Testcontainers + GitHub Actions — ADR-008 |
