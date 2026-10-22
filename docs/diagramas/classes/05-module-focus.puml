@@ -1,0 +1,185 @@
+@startuml Module-Focus
+
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam ClassBorderColor #3D6B9E
+skinparam ClassBackgroundColor #EDF4FD
+skinparam ClassStereotypeFontColor #3D6B9E
+skinparam ClassFontSize 13
+skinparam ArrowColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+skinparam EnumBackgroundColor #FFF8E1
+skinparam EnumBorderColor #F9A825
+skinparam linetype ortho
+
+title <b>Módulo: Focus (Foco e Produtividade)</b>\nNeuro-Gen · Sessões Pomodoro adaptado · Supressão de notificações (RF-04)
+
+package "domain" #EDF4FD {
+
+    ' ============================================================
+    ' FocusSession — Aggregate Root. Controla ciclo de uma sessão.
+    ' effectiveTime = tempo total − soma das durações de pausa.
+    ' Ao iniciar: publica FocusSessionStarted → suprime notificações.
+    ' Ao encerrar: publica FocusSessionEnded → restaura notificações.
+    ' ============================================================
+    class FocusSession <<aggregate>> {
+        - id : FocusSessionId
+        - userId : UserId
+        - linkedTaskId : TaskId
+        - plannedMinutes : int
+        - breakMinutes : int
+        - startedAt : Instant
+        - endedAt : Instant
+        - accumulatedSeconds : long
+        - status : SessionStatus
+        - pauses : List<PauseRecord>
+        - audit : AuditMetadata
+        + {static} start(cmd : StartFocusSessionCommand) : FocusSession
+        + pause() : void
+        + resume() : void
+        + complete() : void
+        + cancel() : void
+        + effectiveTime() : Duration
+        ' effectiveTime = accumulatedSeconds − soma(PauseRecord.pauseDuration)
+    }
+
+    ' ============================================================
+    ' PauseRecord — Value Object imutável que representa uma pausa.
+    ' Criado ao pausar (resumedAt = null) e completado ao retomar.
+    ' Imutabilidade: resume() retorna nova instância com resumedAt.
+    ' ============================================================
+    class PauseRecord <<valueobject>> {
+        - pausedAt : Instant
+        - resumedAt : Instant
+        + {static} start(pausedAt : Instant) : PauseRecord
+        + end(resumedAt : Instant) : PauseRecord
+        + pauseDuration() : Duration
+        + isActive() : boolean
+        ' isActive(): resumedAt == null
+    }
+
+    class FocusSessionId <<valueobject>> {
+        - value : UUID
+        + {static} generate() : FocusSessionId
+        + value() : UUID
+    }
+
+    ' ============================================================
+    ' SessionStatus — Estado do ciclo de vida da sessão.
+    ' RUNNING: notificações não críticas ficam suprimidas.
+    ' PAUSED: notificações retornam ao normal.
+    ' ============================================================
+    enum SessionStatus {
+        RUNNING
+        ' Sessão ativa — notificações não críticas suprimidas (RF-04.2)
+        PAUSED
+        ' Pausa ativa — notificações normais
+        COMPLETED
+        ' Finalizada pelo usuário ou ao término do timer
+        CANCELLED
+        ' Cancelada antes de completar
+    }
+
+    ' Domain Events
+    class FocusSessionStarted <<record>> {
+        + eventId : UUID
+        + occurredAt : Instant
+        + aggregateId : String
+        + moduleName : String
+        + sessionId : String
+        + userId : String
+        ' Consumido pelo módulo Notification:
+        ' marca userId como "em foco" — suprime alertas
+    }
+
+    class FocusSessionEnded <<record>> {
+        + eventId : UUID
+        + occurredAt : Instant
+        + aggregateId : String
+        + moduleName : String
+        + sessionId : String
+        + userId : String
+        + finalStatus : String
+        ' Consumido pelo módulo Notification:
+        ' remove marca "em foco" — retoma entrega normal
+    }
+
+    ' Exceções de domínio
+    class SessionAlreadyActiveException {
+        ' HTTP 409 Conflict — usuário já tem sessão RUNNING
+    }
+    class SessionNotActiveException {
+        ' HTTP 422 Unprocessable Entity
+        ' Tentativa de pausar/completar sessão não RUNNING
+    }
+
+    ' Porta de saída
+    interface FocusSessionRepository {
+        + save(session : FocusSession) : FocusSession
+        + findById(id : FocusSessionId) : Optional<FocusSession>
+        + findActiveByUserId(userId : UserId) : Optional<FocusSession>
+        + findByUserIdAndPeriod(userId : UserId, from : Instant, to : Instant) : List<FocusSession>
+    }
+}
+
+package "application" #F3F8FF {
+
+    class StartFocusSessionCommand <<record>> {
+        + userId : String
+        + linkedTaskId : String
+        + plannedMinutes : int
+        + breakMinutes : int
+        ' linkedTaskId: null se não vinculado a tarefa
+    }
+
+    class FocusSessionResult <<record>> {
+        + id : String
+        + linkedTaskId : String
+        + linkedTaskTitle : String
+        + plannedMinutes : int
+        + status : String
+        + effectiveSeconds : long
+        + startedAt : String
+        + endedAt : String
+    }
+}
+
+package "api" #F0FFF0 {
+
+    class StartFocusRequest <<record>> {
+        + taskId : String
+        + durationMinutes : int
+        + breakMinutes : int
+        ' @Min(1) @Max(480) durationMinutes
+        ' @Min(1) @Max(60) breakMinutes
+    }
+
+    class FocusSessionResponse <<record>> {
+        + id : String
+        + status : String
+        + plannedMinutes : int
+        + effectiveSeconds : long
+        + linkedTaskTitle : String
+        + startedAt : String
+    }
+
+    class FocusSummaryResponse <<record>> {
+        + totalSessionsToday : int
+        + totalFocusMinutesToday : int
+        + averageFocusMinutesWeek : double
+        ' Exibido no dashboard de métricas (RF-04.7)
+    }
+}
+
+' Relações
+FocusSession "1" *-- "0..*" PauseRecord : pauses
+FocusSession *-- FocusSessionId
+FocusSession --> SessionStatus
+FocusSession ..> FocusSessionStarted : publica
+FocusSession ..> FocusSessionEnded : publica
+
+SessionAlreadyActiveException --|> ConflictException
+SessionNotActiveException --|> DomainException
+
+@enduml

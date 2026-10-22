@@ -1,0 +1,89 @@
+@startuml UC-Vault
+
+!theme plain
+skinparam actorStyle awesome
+skinparam usecaseBorderColor #8B0000
+skinparam usecaseBackgroundColor #FFF0F0
+skinparam usecaseFontSize 12
+skinparam actorBorderColor #8B0000
+skinparam actorBackgroundColor #FFE4E4
+skinparam ArrowColor #8B0000
+skinparam NoteBackgroundColor #FFF3CD
+skinparam NoteBorderColor #856404
+
+title <b>Casos de Uso — Cofre de Senhas (Vault Service Isolado)</b>\nNeuro-Gen · EPIC-08 (RF-08) · ADR-005 · Zero-Knowledge\nConta de Apoio: SEM acesso em nenhuma circunstância (RF-08.5)
+
+left to right direction
+
+actor "Titular" as titular
+actor "Sistema\n(scheduler)" as sistema
+
+rectangle "Vault Service (Serviço Isolado — mTLS)" {
+
+    usecase "Configurar Cofre\n(definir senha mestra)" as UC_SETUP
+    usecase "Abrir Cofre\n(autenticar com senha mestra)" as UC_OPEN
+    usecase "Autenticar com biometria\n(atalho pós-setup — RF-08.4)" as UC_BIO
+    usecase "Criar entrada\n(login/nota/cartão)" as UC_CREATE
+    usecase "Editar entrada" as UC_EDIT
+    usecase "Excluir entrada" as UC_DELETE
+    usecase "Listar entradas\n(metadados, sem decifrar)" as UC_LIST
+    usecase "Gerar senha segura\n(RF-08.7)" as UC_GEN_PWD
+    usecase "Exportar backup\ncriptografado (RF-08.9)" as UC_EXPORT
+    usecase "Recuperar acesso\n(chave de recuperação)" as UC_RECOVER
+    usecase "Auto-lock após\nN minutos de inatividade" as UC_AUTOLOCK
+}
+
+' Titular
+titular --> UC_SETUP
+titular --> UC_OPEN
+titular --> UC_BIO
+titular --> UC_CREATE
+titular --> UC_EDIT
+titular --> UC_DELETE
+titular --> UC_LIST
+titular --> UC_GEN_PWD
+titular --> UC_EXPORT
+titular --> UC_RECOVER
+
+' Sistema
+sistema --> UC_AUTOLOCK
+
+' Inclusões e Extensões
+UC_SETUP .> UC_RECOVER : <<extend>>\n(gera recovery key — exibida 1 vez)
+UC_OPEN .> UC_BIO : <<extend>>\n(biometria como atalho)
+UC_OPEN .> UC_AUTOLOCK : <<include>>\n(inicia timer de auto-lock)
+
+note right of UC_SETUP
+  Setup gera chave de recuperação
+  exibida UMA ÚNICA VEZ. (RF-08.11)
+  Sem ela: dados irrecuperáveis.
+  Sem "esqueci minha senha" tradicional
+  — quebra o zero-knowledge.
+end note
+
+note right of UC_OPEN
+  Chave AES derivada com Argon2id
+  NO DISPOSITIVO DO USUÁRIO.
+  Somente o hash chega ao servidor.
+  Servidor verifica o hash sem
+  ver a senha mestra. (RNF-SEC.3)
+end note
+
+note bottom of UC_AUTOLOCK
+  Padrão: 5 minutos de inatividade.
+  Configurável pelo Titular. (RF-08.6)
+  Após lock: chave AES removida
+  da memória do dispositivo.
+end note
+
+note as N_APOIO #FFE4E4
+  ⚠️  CONTA DE APOIO:
+  O módulo Vault NÃO É LISTADO
+  no menu do Apoio.
+  Nenhuma rota /vault/** existe
+  para role=APOIO no BFF.
+  Tentativa registrada em log
+  de segurança. (RF-08.5, ADR-005)
+end note
+
+@enduml

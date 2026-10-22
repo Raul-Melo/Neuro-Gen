@@ -1,0 +1,89 @@
+@startuml UC-Emotional
+
+!theme plain
+skinparam actorStyle awesome
+skinparam usecaseBorderColor #6A1B9A
+skinparam usecaseBackgroundColor #F3E5F5
+skinparam usecaseFontSize 12
+skinparam actorBorderColor #4A148C
+skinparam actorBackgroundColor #EDE7F6
+skinparam ArrowColor #6A1B9A
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>Casos de Uso — Regulação Emocional</b>\nNeuro-Gen · EPIC-05 (RF-05) · Dado sensível de saúde — LGPD art. 5º, II\nO produto NUNCA realiza diagnóstico clínico
+
+left to right direction
+
+actor "Titular" as titular
+actor "Apoio\n(com permissão EMOTIONAL_CHECKIN\nou JOURNAL)" as apoio
+actor "Sistema\n(scheduler/alertas)" as sistema
+
+rectangle "Sistema: Emotional (Regulação Emocional)" {
+
+    ' Titular
+    usecase "Registrar check-in\n(humor + energia 1-5 + notas)" as UC_CHECKIN
+    usecase "Escrever entrada\nno diário emocional" as UC_JOURNAL
+    usecase "Ver dashboard\nde tendências (7/30/90 dias)" as UC_TREND
+    usecase "Exportar histórico\n(PDF/CSV — RF-05.8)" as UC_EXPORT
+    usecase "Configurar frequência\nde check-in" as UC_CONFIG
+
+    ' Apoio com permissão
+    usecase "Ver check-ins\ndo Titular" as UC_APOIO_CHECKINS
+    usecase "Ver tendências\ndo Titular" as UC_APOIO_TREND
+
+    ' Sistema
+    usecase "Detectar padrão\nsustentado de baixa (5+ dias)" as UC_DETECT
+    usecase "Notificar Apoio\n(com consentimento explícito)" as UC_NOTIFY_APOIO
+    usecase "Sugerir conteúdo\nde apoio contextual" as UC_SUGGEST
+}
+
+' Titular
+titular --> UC_CHECKIN
+titular --> UC_JOURNAL
+titular --> UC_TREND
+titular --> UC_EXPORT
+titular --> UC_CONFIG
+
+' Apoio (ambas permissões distintas)
+apoio --> UC_APOIO_CHECKINS
+apoio --> UC_APOIO_TREND
+
+' Sistema
+sistema --> UC_DETECT
+sistema --> UC_NOTIFY_APOIO
+sistema --> UC_SUGGEST
+
+' Extensões
+UC_DETECT .> UC_NOTIFY_APOIO : <<extend>>\n(somente com consentimento — RF-05.6)
+UC_CHECKIN .> UC_SUGGEST : <<extend>>\n(sugestão após score baixo — RF-05.7)
+UC_JOURNAL .> UC_CHECKIN : <<extend>>\n(pode ser vinculado ao check-in do dia)
+
+note right of UC_APOIO_CHECKINS
+  Requer permissão EMOTIONAL_CHECKIN
+  ativa no vínculo.
+  Notas cifradas: exibidas apenas
+  se permissão JOURNAL também ativa.
+  (Princípio de minimização — RNF-PRIV.7)
+end note
+
+note right of UC_NOTIFY_APOIO
+  Condições para notificar:
+  1. Titular concedeu consentimento
+     explícito para este alerta.
+  2. 5+ dias consecutivos com
+     mood_score abaixo do limiar.
+  Mensagem apresenta "padrão
+  observado" — não diagnóstico.
+  (RF-05.6, RNF-PRIV.1)
+end note
+
+note bottom of UC_TREND
+  Todo insight exibido inclui
+  disclaimer obrigatório:
+  "Este padrão não constitui
+  diagnóstico clínico nem
+  recomendação médica." (RF-05)
+end note
+
+@enduml

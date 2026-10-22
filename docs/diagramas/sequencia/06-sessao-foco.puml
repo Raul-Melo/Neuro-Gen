@@ -1,0 +1,191 @@
+@startuml SEQ-Sessao-Foco
+
+!theme plain
+skinparam sequenceArrowThickness 2
+skinparam sequenceParticipantBorderColor #3D6B9E
+skinparam sequenceParticipantBackgroundColor #EDF4FD
+skinparam sequenceActorBorderColor #1A237E
+skinparam sequenceActorBackgroundColor #E8EAF6
+skinparam sequenceLifeLineBorderColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>SEQ-06: Sessão de Foco (Início → Pausa → Retomada → Conclusão)</b>\nNeuro-Gen · RF-04.1 ~ RF-04.5\neffectiveTime = totalElapsed − sum(pauseDurations)
+
+actor "Titular" as titular
+participant "Client" as client
+participant "BFF" as bff
+participant "CoreService\n(Focus Module)" as core
+participant "CoreDB\n(ng_core)" as db
+participant "NotifService" as notif
+
+== Início da Sessão ==
+
+titular -> client : Clica "Iniciar Foco"\n(técnica Pomodoro, 25min)
+activate client
+
+client -> bff : POST /api/v1/focus/sessions\n{taskId?, durationMinutes: 25}
+activate bff
+
+bff -> core : StartFocusSessionCommand\n{userId, taskId, durationMinutes}
+activate core
+
+core -> db : SELECT ng_focus_sessions\nWHERE user_id=? AND status IN (RUNNING, PAUSED)
+activate db
+db --> core : resultado
+deactivate db
+
+alt Sessão já ativa para o usuário
+    core --> bff : throws SessionAlreadyActiveException
+    bff --> client : HTTP 409\n{code: FOCUS_SESSION_ALREADY_ACTIVE}
+else Sem sessão ativa — prossegue
+    note over core
+      FocusSession.start(userId, durationMin):
+      id = UUID
+      startedAt = NOW()
+      status = RUNNING
+      plannedDurationMin = 25
+      effectiveTimeSeconds = 0
+      Publica FocusSessionStarted
+    end note
+
+    core -> db : INSERT ng_focus_sessions\n(id, user_id, status=RUNNING,\nstarted_at, planned_duration_min=25,\ntask_id?)
+    activate db
+    db --> core : OK
+    deactivate db
+
+    core --> bff : FocusSessionResult\n{sessionId, status=RUNNING}
+    deactivate core
+
+    bff --> client : HTTP 201 Created
+    deactivate bff
+
+    client --> titular : Timer iniciado: 25:00 ⏱
+end
+
+deactivate client
+
+== Pausa da Sessão ==
+
+note over titular : Precisa parar por alguns minutos
+
+titular -> client : Clica "Pausar"
+activate client
+
+client -> bff : POST /api/v1/focus/sessions/{id}/pause
+activate bff
+
+bff -> core : PauseFocusSessionCommand\n{sessionId, userId}
+activate core
+
+core -> db : SELECT ng_focus_sessions WHERE id=?
+activate db
+db --> core : FocusSession
+deactivate db
+
+alt Status não é RUNNING
+    core --> bff : throws SessionNotActiveException
+    bff --> client : HTTP 409
+else Status RUNNING — prossegue
+    note over core
+      session.pause():
+      status = PAUSED
+      PauseRecord.start(NOW())
+      adiciona à lista de pausas
+    end note
+
+    core -> db : UPDATE ng_focus_sessions\nSET status=PAUSED\nINSERT ng_focus_pauses\n(session_id, paused_at=NOW())
+    activate db
+    db --> core : OK
+    deactivate db
+
+    core --> bff : FocusSessionResult\n{status=PAUSED}
+    deactivate core
+
+    bff --> client : HTTP 200 OK
+    deactivate bff
+
+    client --> titular : Timer pausado ⏸
+end
+
+deactivate client
+
+== Retomada da Sessão ==
+
+titular -> client : Clica "Retomar"
+activate client
+
+client -> bff : POST /api/v1/focus/sessions/{id}/resume
+activate bff
+
+bff -> core : ResumeFocusSessionCommand\n{sessionId, userId}
+activate core
+
+note over core
+  session.resume():
+  Fecha o PauseRecord atual
+  pauseRecord.end(NOW())
+  → pauseDuration calculada
+  status = RUNNING
+end note
+
+core -> db : UPDATE ng_focus_pauses\nSET resumed_at=NOW()\nUPDATE ng_focus_sessions\nSET status=RUNNING
+activate db
+db --> core : OK
+deactivate db
+
+core --> bff : FocusSessionResult\n{status=RUNNING}
+deactivate core
+
+bff --> client : HTTP 200 OK
+deactivate bff
+
+client --> titular : Timer retomado ▶
+deactivate client
+
+== Conclusão da Sessão ==
+
+note over client : Timer chega a 00:00\n(ou usuário finaliza manualmente)
+
+client -> bff : POST /api/v1/focus/sessions/{id}/complete
+activate bff
+activate client
+
+bff -> core : CompleteFocusSessionCommand\n{sessionId, userId}
+activate core
+
+core -> db : SELECT ng_focus_sessions + ng_focus_pauses\nWHERE session_id=?
+activate db
+db --> core : Session + lista de pausas
+deactivate db
+
+note over core
+  session.complete():
+  endedAt = NOW()
+  totalElapsed = endedAt - startedAt
+  pauseTotal = SUM(ng_focus_pauses.duration)
+  effectiveTimeSeconds = totalElapsed - pauseTotal
+  status = COMPLETED
+  Publica FocusSessionEnded
+end note
+
+core -> db : UPDATE ng_focus_sessions\nSET status=COMPLETED,\nended_at=NOW(),\neffective_time_seconds=?
+activate db
+db --> core : OK
+deactivate db
+
+core -> notif : Restaura supressão de notificações\n(se havia silenciamento ativo)
+activate notif
+notif --> core : OK
+deactivate notif
+
+core --> bff : FocusSessionResult\n{status=COMPLETED,\neffectiveTimeSeconds: 1342}
+deactivate core
+
+bff --> client : HTTP 200 OK\n{FocusSessionResponse:\n  planned: 25min\n  effective: 22min 22s\n  paused: 2min 38s}
+deactivate bff
+
+client --> titular : Sessão concluída!\n"22min 22s de foco efetivo 🎯"
+deactivate client
+
+@enduml

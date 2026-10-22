@@ -1,0 +1,151 @@
+@startuml SEQ-Cofre-Zero-Knowledge
+
+!theme plain
+skinparam sequenceArrowThickness 2
+skinparam sequenceParticipantBorderColor #8B0000
+skinparam sequenceParticipantBackgroundColor #FFF0F0
+skinparam sequenceActorBorderColor #8B0000
+skinparam sequenceActorBackgroundColor #FFE0E0
+skinparam sequenceLifeLineBorderColor #8B0000
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>SEQ-07: Cofre Zero-Knowledge (Abrir → Criar Entrada → Auto-lock)</b>\nNeuro-Gen · RF-08, ADR-005\nChave NUNCA enviada ao servidor — criptografia ocorre integralmente no CLIENT
+
+actor "Titular" as titular
+participant "Client\n(Device)" as client
+participant "BFF" as bff
+participant "VaultService\n(isolated)" as vault
+participant "VaultDB\n(separate DB)" as db
+
+note over client, db #FFE4E4
+  VAULT é um serviço completamente isolado.
+  Servidor armazena APENAS ciphertext + IV + salt.
+  Zero-knowledge: servidor não pode descriptografar.
+end note
+
+== Fase 1: Abrir o Cofre (Derivação de Chave no Client) ==
+
+titular -> client : Digita senha mestra
+activate client
+
+note over client #FFE4E4
+  Derivação de chave — 100% client-side:
+  salt ← baixado do servidor (per user)
+  masterKey ← Argon2id(senha, salt,
+    m=19456KB, t=2, p=1)
+  A senha nunca deixa o dispositivo.
+  A masterKey nunca é enviada ao servidor.
+end note
+
+client -> bff : GET /api/v1/vault/meta\n(para obter salt do usuário)
+activate bff
+bff -> vault : GetMasterKeyMetaQuery\n{userId}
+activate vault
+vault -> db : SELECT ng_master_key_meta\nWHERE user_id=?
+activate db
+db --> vault : {argon2_params, salt, recovery_key_hash}
+deactivate db
+vault --> bff : MasterKeyMetaResult\n{salt, argon2Params}
+deactivate vault
+bff --> client : {salt, argon2Params}
+deactivate bff
+
+note over client
+  Client executa Argon2id localmente.
+  Deriva masterKey da senha + salt.
+  Armazena masterKey em memória protegida
+  (SecureEnclave iOS / Android Keystore).
+end note
+
+client --> titular : Cofre aberto (ícone desbloqueado 🔓)
+
+== Fase 2: Criar Nova Entrada no Cofre ==
+
+titular -> client : Cria entrada:\ntipo=CREDENTIAL,\ntítulo="Email pessoal",\ncontéudo="senha123"
+activate client
+
+note over client #FFE4E4
+  Criptografia 100% client-side:
+  iv ← SecureRandom(12 bytes)
+  ciphertext ← AES-256-GCM(masterKey, iv, plaintext)
+  Envia ao servidor: ciphertext + iv + salt
+  Plaintext NUNCA sai do dispositivo.
+end note
+
+client -> bff : POST /api/v1/vault/entries\n{\n  type: CREDENTIAL,\n  title: "Email pessoal",\n  encryptedPayload: {\n    ciphertext: "<base64>",\n    iv: "<12 bytes base64>",\n    salt: "<32 bytes base64>"\n  }\n}
+activate bff
+
+bff -> vault : CreateVaultEntryCommand\n{userId, type, title, encryptedPayload}
+activate vault
+
+note over vault
+  VaultEntry.create(cmd):
+  Servidor NÃO interpreta encryptedPayload.
+  Armazena ciphertext como blob opaco.
+  Só valida: userId, type enum, title length.
+  Publica nenhum evento sensível
+  (log inclui apenas userId + action, sem dados).
+end note
+
+vault -> db : INSERT ng_vault_entries\n(id, owner_id, type, title,\nciphertext_enc, iv, salt,\ncreated_at)
+activate db
+db --> vault : OK
+deactivate db
+
+vault -> db : INSERT ng_vault_auth_logs\n(user_id, action=ENTRY_CREATED,\nip_address, timestamp)
+activate db
+db --> vault : OK
+deactivate db
+
+vault --> bff : VaultEntryResult\n{entryId, type, title, createdAt}
+deactivate vault
+
+bff --> client : HTTP 201 Created\n{VaultEntryResponse — sem payload}
+deactivate bff
+
+client --> titular : Entrada salva no cofre ✓
+deactivate client
+
+== Fase 3: Ler uma Entrada (Descriptografia no Client) ==
+
+titular -> client : Seleciona "Email pessoal"
+activate client
+
+client -> bff : GET /api/v1/vault/entries/{entryId}
+activate bff
+bff -> vault : GetVaultEntryQuery\n{entryId, userId}
+activate vault
+vault -> db : SELECT ng_vault_entries\nWHERE id=? AND owner_id=?
+activate db
+db --> vault : {ciphertext, iv, salt}
+deactivate db
+vault --> bff : VaultEntryResult\n{encryptedPayload}
+deactivate vault
+bff --> client : {encryptedPayload}
+deactivate bff
+
+note over client #FFE4E4
+  Descriptografia 100% client-side:
+  plaintext ← AES-256-GCM-Decrypt(masterKey, iv, ciphertext)
+  Exibe apenas em memória — não persiste localmente.
+  Se masterKey não está em memória → solicita senha.
+end note
+
+client --> titular : Exibe conteúdo descriptografado\n(visível apenas na tela, sem copiar para clipboard)
+deactivate client
+
+== Fase 4: Auto-lock por Inatividade ==
+
+note over client #FFF3E0
+  Timer de inatividade (5 min sem uso):
+  1. Descarta masterKey da memória protegida
+  2. Solicita senha mestra para reabrir
+  3. Nenhum dado sensível persiste no client
+end note
+
+client -> client : Auto-lock: zera masterKey da memória
+
+client --> titular : Cofre bloqueado automaticamente 🔒\n(inatividade > 5 minutos)
+
+@enduml

@@ -1,0 +1,124 @@
+@startuml DER-Schema-Vault
+
+!theme plain
+skinparam EntityBorderColor #8B0000
+skinparam EntityBackgroundColor #FFF0F0
+skinparam EntityFontSize 13
+skinparam ArrowColor #8B0000
+skinparam NoteBackgroundColor #FFF3CD
+skinparam NoteBorderColor #856404
+skinparam linetype ortho
+
+title <b>DER — Schema: ng_vault</b>\nNeuro-Gen · Cofre Zero-Knowledge — ADR-005 · RNF-SEC.3/4\n<b>Banco PostgreSQL SEPARADO</b> — credenciais de infraestrutura distintas
+
+note as N_VAULT
+  ⚠️  BANCO POSTGRESQL SEPARADO DO CORE DB
+  Credenciais de infraestrutura próprias.
+  Nenhum outro serviço tem acesso direto ao VaultDB.
+  O servidor NUNCA vê texto claro das entradas.
+  Apenas bytes cifrados são armazenados e devolvidos.
+  Dados de conta excluída: eliminação imediata e irreversível (RNF-RET.2).
+  FK para ng_users NÃO é declarada (cross-database) — integridade
+  garantida pela camada de aplicação do VaultService.
+end note
+
+' ============================================================
+' ng_vault_entries — Entradas do Cofre.
+' ciphertext + iv + salt: componentes do AES-256-GCM.
+' Cifrado no cliente com Argon2id + AES-256-GCM.
+' Servidor armazena e devolve bytes sem interpretá-los.
+' entry_type: hint visual para o cliente (ícone/campos).
+' ============================================================
+entity "ng_vault_entries" as entries {
+    * id : uuid <<PK>>
+    --
+    * owner_id : uuid
+    * label : varchar(200)
+    * entry_type : varchar(30)
+    * ciphertext : bytea
+    * iv : bytea
+    * salt : bytea
+    * created_at : timestamptz
+    * updated_at : timestamptz
+}
+
+note right of entries
+  entry_type:
+    LOGIN_CREDENTIAL
+    SECURE_NOTE
+    CREDIT_CARD
+    API_KEY
+    CUSTOM
+  ciphertext: AES-256-GCM do conteúdo.
+  iv: nonce 16 bytes (único por entrada).
+  salt: usado na derivação Argon2id.
+  Sem FK para ng_users (cross-DB).
+  Índice: (owner_id) para listagem.
+end note
+
+' ============================================================
+' ng_vault_auth_logs — Log imutável de acessos ao Cofre.
+' Sem UPDATE/DELETE — append-only (RNF-SEC.8).
+' Auditado pela equipe de segurança (RF-12.4).
+' Inclui tentativas falhas (possível ataque de brute-force).
+' ============================================================
+entity "ng_vault_auth_logs" as auth_logs {
+    * id : uuid <<PK>>
+    --
+    * user_id : uuid
+    * action : varchar(50)
+    ip_address : varchar(45)
+    user_agent_hash : varchar(64)
+    * success : boolean
+    failure_reason : varchar(200)
+    * attempted_at : timestamptz
+}
+
+note right of auth_logs
+  Exemplos de action:
+    OPEN — abrir cofre
+    LOCK — bloquear cofre
+    ENTRY_CREATE — criar entrada
+    ENTRY_READ — ler entrada
+    ENTRY_DELETE — excluir entrada
+    ACCESS_DENIED_APOIO — tentativa de
+      acesso por conta Apoio (alerta!)
+  user_agent_hash: SHA-256 do UA.
+  Tabela imutável: sem updated_at.
+  Alerta automático em pico de
+  ACCESS_DENIED_APOIO (RNF-OBS.5).
+end note
+
+' ============================================================
+' ng_master_key_meta — Parâmetros Argon2id e hash da recovery key.
+' NUNCA armazena a chave derivada ou a senha mestra.
+' recovery_key_hash: SHA-256(recovery_key) gerada no setup.
+' Sem a recovery key: dados irrecuperáveis (RF-08.11).
+' ============================================================
+entity "ng_master_key_meta" as key_meta {
+    * id : uuid <<PK>>
+    --
+    * user_id : uuid <<UNIQUE>>
+    * argon2_params : varchar(100)
+    * recovery_key_hash : varchar(64)
+    * configured_at : timestamptz
+    last_auth_at : timestamptz
+}
+
+note right of key_meta
+  argon2_params exemplo:
+    "m=19456,t=2,p=1,v=19"
+  recovery_key_hash = SHA-256(recovery_key).
+  Permite verificar a recovery_key
+  sem armazená-la (zero-knowledge).
+  last_auth_at: timestamp do
+  último unlock bem-sucedido.
+  Sem FK cross-database para ng_users.
+  Relação 1:1 por user_id (UNIQUE).
+end note
+
+' Relacionamentos internos ao banco ng_vault
+key_meta ||--o{ entries : "protege entradas do usuário (1:N)"
+key_meta ||--o{ auth_logs : "gera logs de acesso (1:N)"
+
+@enduml

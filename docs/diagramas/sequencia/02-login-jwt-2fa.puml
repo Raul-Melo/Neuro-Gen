@@ -1,0 +1,126 @@
+@startuml SEQ-Login-JWT-2FA
+
+!theme plain
+skinparam sequenceArrowThickness 2
+skinparam sequenceParticipantBorderColor #3D6B9E
+skinparam sequenceParticipantBackgroundColor #EDF4FD
+skinparam sequenceActorBorderColor #1A237E
+skinparam sequenceActorBackgroundColor #E8EAF6
+skinparam sequenceLifeLineBorderColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>SEQ-02: Login com Credenciais (JWT + 2FA Opcional)</b>\nNeuro-Gen · RF-01.4, RF-01.9, RNF-SEC.5/6\nAccess token: JWT 15min · Refresh token: 30 dias persistido
+
+actor "Usuário\n(Titular ou Apoio)" as user
+participant "Client" as client
+participant "BFF" as bff
+participant "CoreService\n(Identity)" as core
+participant "CoreDB\n(ng_identity)" as db
+participant "Redis\n(Cache)" as redis
+
+user -> client : Informa e-mail e senha
+activate client
+
+client -> bff : POST /api/v1/auth/login\n{email, password}
+activate bff
+
+note over bff
+  Rate limiting por IP:
+  máx. 5 tentativas/min (RNF-SEC.6)
+  Bloqueio progressivo após limite
+end note
+
+bff -> core : LoginCommand\n{email, rawPassword, totpCode=null}
+activate core
+
+core -> db : SELECT ng_users WHERE email=?
+activate db
+db --> core : User ou NOT_FOUND
+deactivate db
+
+alt E-mail não cadastrado
+    core --> bff : throws InvalidCredentialsException
+    note right of bff
+      Mensagem genérica:
+      "Email ou senha incorretos"
+      (não revela qual campo está errado)
+    end note
+    bff --> client : HTTP 401\n{code: AUTH_INVALID_CREDENTIALS}
+
+else Conta PENDING_VERIFICATION
+    core --> bff : throws EmailNotVerifiedException
+    bff --> client : HTTP 403\n{code: EMAIL_NOT_VERIFIED}
+
+else Conta SUSPENDED
+    core --> bff : throws AccountSuspendedException
+    bff --> client : HTTP 403\n{code: ACCOUNT_SUSPENDED}
+
+else Senha incorreta
+    core --> bff : throws InvalidCredentialsException
+    bff --> client : HTTP 401\n{code: AUTH_INVALID_CREDENTIALS}
+
+else Credenciais válidas — 2FA ATIVO
+    note over core
+      user.requiresTotp() == true
+    end note
+
+    core --> bff : throws TotpRequiredException
+    bff --> client : HTTP 401\n{code: TOTP_REQUIRED, step: "MFA"}
+
+    note over user : Abre app autenticador e digita código
+    user -> client : Informa código TOTP (6 dígitos)
+    client -> bff : POST /api/v1/auth/login\n{email, password, totpCode: "123456"}
+    bff -> core : LoginCommand\n{email, rawPassword, totpCode}
+
+    core -> db : SELECT ng_totp_secrets\nWHERE user_id=?
+    activate db
+    db --> core : {encrypted_secret}
+    deactivate db
+
+    note over core
+      totpSecret.verifyCode(totpCode)
+      Janela de tolerância: ±1 período (30s)
+    end note
+
+    alt TOTP inválido ou expirado
+        core --> bff : throws InvalidTotpCodeException
+        bff --> client : HTTP 401\n{code: TOTP_INVALID}
+    else TOTP válido — continua abaixo
+    end
+
+else Credenciais válidas — sem 2FA
+end
+
+== Geração e Persistência dos Tokens ==
+
+note over core
+  Gera accessToken:
+    JWT com claims: userId, role, email
+    Assinado com RS256
+    Expiração: 15 minutos (stateless)
+  Gera refreshToken:
+    Token opaco aleatório (64 bytes)
+    SHA-256(refreshToken) → banco
+end note
+
+core -> db : INSERT ng_sessions\n(user_id, refresh_token_hash=SHA256(token),\nexpires_at=NOW()+30d, device_info)
+activate db
+db --> core : OK
+deactivate db
+
+core -> redis : SET session:{userId}:active = true\nEX 1800
+activate redis
+redis --> core : OK
+deactivate redis
+
+core --> bff : AuthResult\n{accessToken, refreshToken, expiresIn, user}
+deactivate core
+
+bff --> client : HTTP 200 OK\n{TokenResponse + UserProfileResponse}
+deactivate bff
+
+client --> user : Redireciona para dashboard
+deactivate client
+
+@enduml

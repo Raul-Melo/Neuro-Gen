@@ -1,0 +1,81 @@
+@startuml UC-Admin
+
+!theme plain
+skinparam actorStyle awesome
+skinparam usecaseBorderColor #37474F
+skinparam usecaseBackgroundColor #ECEFF1
+skinparam usecaseFontSize 12
+skinparam actorBorderColor #263238
+skinparam actorBackgroundColor #CFD8DC
+skinparam ArrowColor #37474F
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>Casos de Uso — Administração Interna</b>\nNeuro-Gen · EPIC-12 (RF-12)\nAcesso restrito — NUNCA expõe conteúdo de dados do usuário
+
+left to right direction
+
+actor "Admin\n(equipe operacional)" as admin
+actor "Security Team\n(equipe de segurança)" as security
+
+rectangle "Sistema: Administração e Observabilidade" {
+
+    ' Suporte operacional
+    usecase "Ver status operacional\nde conta (metadados)" as UC_STATUS
+    usecase "Ver health check\ne status page pública" as UC_HEALTH
+    usecase "Gerenciar fila de\nnotificações" as UC_QUEUE
+
+    ' Segurança
+    usecase "Auditar tentativas\nde acesso ao Cofre" as UC_VAULT_AUDIT
+    usecase "Ver logs de\nacesso negado" as UC_DENIED_LOGS
+    usecase "Receber alerta de\nanomalia no Cofre" as UC_VAULT_ALERT
+}
+
+' Admin
+admin --> UC_STATUS
+admin --> UC_HEALTH
+admin --> UC_QUEUE
+
+' Security Team
+security --> UC_VAULT_AUDIT
+security --> UC_DENIED_LOGS
+security --> UC_VAULT_ALERT
+
+' Extensões
+UC_VAULT_AUDIT .> UC_DENIED_LOGS : <<include>>\n(logs de acesso negado fazem parte da auditoria)
+UC_DENIED_LOGS .> UC_VAULT_ALERT : <<extend>>\n(anomalia gera alerta automático)
+
+note right of UC_STATUS
+  Admin vê SOMENTE metadados:
+  • status da conta
+  • created_at, last_login
+  NUNCA acessa:
+  • conteúdo de tarefas/eventos
+  • dados emocionais
+  • diário
+  • entradas do Cofre
+  • notas de check-in
+  (Princípio de minimização)
+end note
+
+note right of UC_VAULT_AUDIT
+  Acesso restrito à equipe de
+  segurança. (RF-12.4)
+  Visualiza ng_vault_auth_logs:
+  • ação, IP, user_agent_hash
+  • success/failure
+  NUNCA acessa ng_vault_entries
+  (bytes cifrados — sem utilidade
+  sem a chave mestra do usuário).
+end note
+
+note bottom of UC_VAULT_ALERT
+  Alerta automático em caso de:
+  • Pico de tentativas negadas
+  • Múltiplos ACCESS_DENIED_APOIO
+    em curto período
+  Tratado como incidente de
+  segurança (RNF-OBS.5).
+end note
+
+@enduml

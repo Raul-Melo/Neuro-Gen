@@ -1,0 +1,102 @@
+@startuml UC-Agenda
+
+!theme plain
+skinparam actorStyle awesome
+skinparam usecaseBorderColor #3D6B9E
+skinparam usecaseBackgroundColor #EDF4FD
+skinparam usecaseFontSize 12
+skinparam actorBorderColor #1A237E
+skinparam actorBackgroundColor #E8EAF6
+skinparam ArrowColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>Casos de Uso — Agenda e Planner</b>\nNeuro-Gen · EPIC-02 + EPIC-03 + EPIC-06 (RF-02, RF-03, RF-06)
+
+left to right direction
+
+actor "Titular" as titular
+actor "Apoio\n(com permissão AGENDA)" as apoio
+
+rectangle "Sistema: Agenda" {
+
+    ' Eventos
+    usecase "Criar evento\n(com/sem recorrência)" as UC_CREATE_EVENT
+    usecase "Editar evento recorrente\n(escopo obrigatório — RF-02)" as UC_EDIT_RECUR
+    usecase "Reagendar evento\n(drag-and-drop)" as UC_RESCHEDULE
+    usecase "Cancelar evento" as UC_CANCEL_EVENT
+
+    ' Tarefas
+    usecase "Criar tarefa\ncom subtarefas" as UC_CREATE_TASK
+    usecase "Concluir tarefa" as UC_COMPLETE
+    usecase "Arquivar tarefa" as UC_ARCHIVE
+    usecase "Adicionar subtarefa" as UC_ADD_SUB
+
+    ' Lembretes
+    usecase "Configurar lembrete\n(simples ou nudge)" as UC_REMINDER
+    usecase "Confirmar lembrete\nrecebido" as UC_CONFIRM_REM
+
+    ' Visões
+    usecase "Visualizar\ncalendário (dia/semana/mês)" as UC_VIEW_CAL
+    usecase "Visualizar\nkanban por status" as UC_VIEW_KANBAN
+    usecase "Visualizar\nlista com filtros" as UC_VIEW_LIST
+
+    ' Organização
+    usecase "Criar categoria\n(cor e ícone)" as UC_CATEGORY
+    usecase "Aplicar template\nde rotina" as UC_TEMPLATE
+    usecase "Busca global\ncom filtros" as UC_SEARCH
+
+    ' Acesso do Apoio
+    usecase "Visualizar agenda\ndo Titular" as UC_APOIO_VIEW
+}
+
+' Titular
+titular --> UC_CREATE_EVENT
+titular --> UC_EDIT_RECUR
+titular --> UC_RESCHEDULE
+titular --> UC_CANCEL_EVENT
+titular --> UC_CREATE_TASK
+titular --> UC_COMPLETE
+titular --> UC_ARCHIVE
+titular --> UC_ADD_SUB
+titular --> UC_REMINDER
+titular --> UC_CONFIRM_REM
+titular --> UC_VIEW_CAL
+titular --> UC_VIEW_KANBAN
+titular --> UC_VIEW_LIST
+titular --> UC_CATEGORY
+titular --> UC_TEMPLATE
+titular --> UC_SEARCH
+
+' Apoio com permissão
+apoio --> UC_APOIO_VIEW
+
+' Extensões e inclusões
+UC_CREATE_EVENT .> UC_REMINDER : <<extend>>\n(pode adicionar lembretes)
+UC_CREATE_TASK .> UC_ADD_SUB : <<extend>>\n(pode ter subtarefas)
+UC_EDIT_RECUR .> UC_RESCHEDULE : <<include>>\n(sempre pede escopo)
+
+note right of UC_EDIT_RECUR
+  Escopo obrigatório ao editar
+  item recorrente (RF-02):
+  • Esta ocorrência
+  • Esta e futuras
+  • Todas as ocorrências
+  Evita edição em massa acidental.
+end note
+
+note right of UC_APOIO_VIEW
+  Apoio visualiza SOMENTE:
+  • Itens marcados shared=true
+  • Apenas se permissão AGENDA ativa
+  • Lembrete pessoal não visível
+end note
+
+note bottom of UC_REMINDER
+  Nudge (persistent=true):
+  repete a cada N minutos
+  até M repetições ou confirmação.
+  (RF-03.2)
+end note
+
+@enduml

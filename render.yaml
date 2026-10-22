@@ -1,0 +1,50 @@
+# Blueprint do Render (infraestrutura como código) — ADR-007.
+# Cria o PostgreSQL e o serviço web (Docker) e os conecta, num único passo:
+#   Render Dashboard > New > Blueprint > selecionar este repositório.
+# Passo a passo completo em docs/deploy/README.md.
+
+databases:
+  - name: neurogen-db
+    plan: free                  # gratuito: expira 30 dias após a criação
+    region: virginia            # região mais próxima do Brasil; precisa ser a mesma do serviço
+    postgresMajorVersion: "16"  # mesma versão do compose.yaml e do teste de integração (ADR-002)
+    databaseName: neurogen
+    user: neurogen
+
+services:
+  - type: web
+    name: neuro-gen-api
+    runtime: docker
+    plan: free                  # gratuito: hiberna após 15 min sem tráfego
+    region: virginia
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /actuator/health
+    # Só publica depois que o CI (GitHub Actions) passar no commit: TDD -> CI -> deploy.
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+      - key: DB_HOST
+        fromDatabase:
+          name: neurogen-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: neurogen-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: neurogen-db
+          property: database
+      - key: DB_USERNAME
+        fromDatabase:
+          name: neurogen-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: neurogen-db
+          property: password
+      # Chave AES-256 dos dados sensíveis: o Render gera um valor aleatório de 256 bits em Base64.
+      - key: SENSITIVE_DATA_KEY
+        generateValue: true

@@ -1,0 +1,221 @@
+@startuml Module-Emotional
+
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam ClassBorderColor #3D6B9E
+skinparam ClassBackgroundColor #EDF4FD
+skinparam ClassStereotypeFontColor #3D6B9E
+skinparam ClassFontSize 13
+skinparam ArrowColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+skinparam EnumBackgroundColor #FFF8E1
+skinparam EnumBorderColor #F9A825
+skinparam linetype ortho
+
+title <b>Módulo: Emotional (Regulação Emocional)</b>\nNeuro-Gen · Dado sensível de saúde — LGPD art. 5º, II (ADR-006)
+
+note as N_LGPD
+  ⚠️ LGPD — Dado sensível de saúde
+  Schema separado: ng_sensitive
+  Colunas criptografadas: pgcrypto
+  Acesso por Apoio: exige permissão explícita
+  O sistema NUNCA realiza diagnóstico clínico.
+  Insights apresentados como "padrão observado".
+end note
+
+package "domain" #EDF4FD {
+
+    ' ============================================================
+    ' MoodCheckIn — Aggregate Root para check-in de humor/energia.
+    ' Preenchimento em < 10s: escala visual 1-5 + nota opcional.
+    ' Configurável: 1x/dia ou múltiplas vezes ao dia (RF-05.1/05.2).
+    ' notes cifrado em repouso com pgcrypto (dado sensível).
+    ' ============================================================
+    class MoodCheckIn <<aggregate>> {
+        - id : MoodCheckInId
+        - userId : UserId
+        - moodScore : MoodScore
+        - energyLevel : EnergyLevel
+        - checkInDate : LocalDate
+        - checkInTime : LocalTime
+        - notes : String
+        - audit : AuditMetadata
+        + {static} record(cmd : SubmitMoodCheckInCommand) : MoodCheckIn
+        + isBelowThreshold(threshold : int) : boolean
+        + moodLevel() : MoodLevel
+        ' notes armazenado cifrado (pgcrypto AES-256-GCM)
+    }
+
+    ' ============================================================
+    ' JournalEntry — Diário emocional textual opcional (RF-05.3).
+    ' Pode ser vinculado a MoodCheckIn ou independente.
+    ' content cifrado INTEGRALMENTE — nunca indexado para busca.
+    ' ============================================================
+    class JournalEntry <<aggregate>> {
+        - id : JournalEntryId
+        - userId : UserId
+        - content : String
+        - relatedCheckInId : MoodCheckInId
+        - entryDate : LocalDate
+        - audit : AuditMetadata
+        + {static} write(cmd : WriteJournalCommand) : JournalEntry
+        + edit(newContent : String) : void
+        ' content armazenado cifrado (pgcrypto)
+        ' NUNCA indexado para full-text search
+    }
+
+    ' ============================================================
+    ' MoodScore — VO para pontuação de humor (1-5).
+    ' Lança ValidationException se fora do intervalo [1,5].
+    ' ============================================================
+    class MoodScore <<valueobject>> {
+        - value : int
+        + MoodScore(value : int)
+        + value() : int
+        + toLevel() : MoodLevel
+        ' 1=VERY_LOW 2=LOW 3=NEUTRAL 4=HIGH 5=VERY_HIGH
+    }
+
+    class EnergyLevel <<valueobject>> {
+        - value : int
+        + EnergyLevel(value : int)
+        ' Mesma escala de MoodScore (1-5)
+        + value() : int
+    }
+
+    class MoodCheckInId <<valueobject>> {
+        - value : UUID
+        + {static} generate() : MoodCheckInId
+    }
+
+    class JournalEntryId <<valueobject>> {
+        - value : UUID
+        + {static} generate() : JournalEntryId
+    }
+
+    ' ============================================================
+    ' MoodLevel — Enum derivado do MoodScore.
+    ' Apresentado como "padrão observado" — NUNCA como diagnóstico.
+    ' Texto de disclaimer obrigatório em telas de insight (RF-05).
+    ' ============================================================
+    enum MoodLevel {
+        VERY_LOW
+        ' score = 1
+        LOW
+        ' score = 2
+        NEUTRAL
+        ' score = 3
+        HIGH
+        ' score = 4
+        VERY_HIGH
+        ' score = 5
+    }
+
+    note right of MoodLevel
+      Regra de negócio: todo insight exibido
+      ao usuário deve incluir disclaimer:
+      "Este padrão não constitui diagnóstico
+      clínico nem recomendação médica."
+      (RF-05, RNF-PRIV.1)
+    end note
+
+    ' Exceções de domínio
+    class EmotionalDataForbiddenException {
+        ' HTTP 403 — Apoio sem permissão EMOTIONAL_CHECKIN ou JOURNAL
+    }
+    class CheckInAlreadyTodayException {
+        ' HTTP 409 — quando configurado 1x/dia e já existe check-in
+    }
+
+    ' Portas de saída
+    interface MoodCheckInRepository {
+        + save(checkIn : MoodCheckIn) : MoodCheckIn
+        + findById(id : MoodCheckInId) : Optional<MoodCheckIn>
+        + findByUserAndPeriod(userId : UserId, from : LocalDate, to : LocalDate) : List<MoodCheckIn>
+        + findTodayByUserId(userId : UserId) : Optional<MoodCheckIn>
+    }
+
+    interface JournalEntryRepository {
+        + save(entry : JournalEntry) : JournalEntry
+        + findById(id : JournalEntryId) : Optional<JournalEntry>
+        + findByUserAndPeriod(userId : UserId, from : LocalDate, to : LocalDate) : List<JournalEntry>
+    }
+}
+
+package "application" #F3F8FF {
+
+    class SubmitMoodCheckInCommand <<record>> {
+        + userId : String
+        + moodScore : int
+        + energyLevel : int
+        + notes : String
+    }
+
+    class WriteJournalCommand <<record>> {
+        + userId : String
+        + content : String
+        + relatedCheckInId : String
+    }
+
+    class MoodCheckInResult <<record>> {
+        + id : String
+        + moodScore : int
+        + energyLevel : int
+        + moodLevel : String
+        + checkInDate : String
+        + checkInTime : String
+        + notes : String
+    }
+
+    class MoodTrendResult <<record>> {
+        + dataPoints : List<MoodCheckInResult>
+        + averageMood : double
+        + averageEnergy : double
+        + periodDays : int
+        + trend : String
+        ' trend: IMPROVING | STABLE | DECLINING
+    }
+}
+
+package "api" #F0FFF0 {
+
+    class MoodCheckInRequest <<record>> {
+        + moodScore : int
+        + energyLevel : int
+        + notes : String
+        ' @Min(1) @Max(5) moodScore
+        ' @Min(1) @Max(5) energyLevel
+        ' @Size(max=500) notes
+    }
+
+    class MoodCheckInResponse <<record>> {
+        + id : String
+        + moodScore : int
+        + moodLevel : String
+        + energyLevel : int
+        + checkedAt : String
+    }
+
+    class MoodTrendResponse <<record>> {
+        + dataPoints : List<MoodCheckInResponse>
+        + averageMood : double
+        + averageEnergy : double
+        + periodDays : int
+        + trend : String
+        + disclaimer : String
+        ' disclaimer: texto obrigatório sobre não-diagnóstico (RF-05)
+    }
+}
+
+' Relações
+MoodCheckIn *-- MoodScore
+MoodCheckIn *-- EnergyLevel
+MoodCheckIn *-- MoodCheckInId
+JournalEntry *-- JournalEntryId
+MoodScore --> MoodLevel : derives
+
+EmotionalDataForbiddenException --|> ForbiddenAccessException
+CheckInAlreadyTodayException --|> ConflictException
+
+@enduml

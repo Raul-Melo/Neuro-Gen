@@ -1,0 +1,111 @@
+@startuml DER-Schema-Sensitive
+
+!theme plain
+skinparam EntityBorderColor #6A1B9A
+skinparam EntityBackgroundColor #F3E5F5
+skinparam EntityFontSize 13
+skinparam ArrowColor #6A1B9A
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+skinparam linetype ortho
+
+title <b>DER — Schema: ng_sensitive</b>\nNeuro-Gen · Dados Sensíveis de Saúde — LGPD art. 5º, II (ADR-006)\nPostgreSQL 16 — banco: ng_core_db (schema isolado)
+
+note as N_SENSITIVE
+  ⚠️  Schema: ng_sensitive — Dado Sensível de Saúde
+  LGPD art. 5º, II — tratamento reforçado obrigatório.
+  Separado do schema ng_core (ADR-006).
+  Colunas de conteúdo criptografadas com pgcrypto (AES-256-GCM).
+  Acesso por Apoio: dupla verificação (vínculo ativo + permissão).
+  Toda leitura de dado sensível por Apoio passa pela camada de aplicação —
+  nunca por query direta com bypass de permissão.
+end note
+
+' ============================================================
+' ng_mood_checkins — Check-ins de humor e energia (RF-05.1).
+' notes_enc: campo de notas criptografado com pgcrypto.
+' Índice composto (user_id, checkin_date) para queries de tendência.
+' ============================================================
+entity "ng_mood_checkins" as checkins {
+    * id : uuid <<PK>>
+    --
+    * user_id : uuid <<FK→ng_identity.ng_users>>
+    * mood_score : smallint
+    * energy_level : smallint
+    notes_enc : bytea
+    * checkin_date : date
+    * checkin_time : time
+    * created_at : timestamptz
+}
+
+note right of checkins
+  mood_score: 1-5 (CHECK constraint).
+  energy_level: 1-5 (CHECK constraint).
+  notes_enc: pgcrypto_encrypt(notes).
+  NUNCA armazenado em texto claro.
+  Índice: (user_id, checkin_date DESC)
+  para queries de dashboard (RF-05.4).
+end note
+
+' ============================================================
+' ng_journal_entries — Diário emocional textual (RF-05.3).
+' content_enc: texto INTEGRALMENTE cifrado com pgcrypto.
+' NUNCA indexado para full-text search — dado sensível de saúde.
+' related_checkin_id: opcional — vínculo com check-in do dia.
+' ============================================================
+entity "ng_journal_entries" as journal {
+    * id : uuid <<PK>>
+    --
+    * user_id : uuid <<FK→ng_identity.ng_users>>
+    * content_enc : bytea
+    related_checkin_id : uuid <<FK>>
+    * entry_date : date
+    * created_at : timestamptz
+    * updated_at : timestamptz
+}
+
+note right of journal
+  content_enc: pgcrypto_encrypt(text).
+  Sem índice de texto em content_enc —
+  busca por data ou user_id apenas.
+  Impede inferência de conteúdo
+  mesmo por acesso direto ao banco.
+end note
+
+' ============================================================
+' ng_neurodivergence_profiles — Perfil declarado pelo usuário.
+' declared_profiles[]: array de strings — NUNCA obrigatório.
+' prefer_not_inform: flag explícita, DISTINTA de array vazio.
+'   - array vazio = nunca preenchido
+'   - prefer_not_inform=true = usuário optou por não informar
+' NUNCA restringe funcionalidades — apenas sugere defaults.
+' ============================================================
+entity "ng_neurodivergence_profiles" as neuro_profiles {
+    * id : uuid <<PK, FK→ng_identity.ng_users>>
+    --
+    * user_id : uuid <<FK, UNIQUE>>
+    declared_profiles : varchar[]
+    * prefer_not_inform : boolean
+    * updated_at : timestamptz
+    * created_at : timestamptz
+}
+
+note right of neuro_profiles
+  Exemplos de declared_profiles:
+    ['TDAH', 'TEA']
+    ['2E']
+    ['SUPERDOTACAO']
+  NULL = nunca preenchido.
+  prefer_not_inform=true = optou por
+  não informar (diferente de NULL).
+  Usado APENAS para sugerir defaults
+  de configuração (RF-10.1).
+  Base legal: consentimento explícito
+  e revogável (RNF-PRIV.2).
+end note
+
+' Relacionamentos
+checkins ||--o{ journal : "pode ter entradas de diário (0:N)"
+neuro_profiles ||--|| checkins : "pertence ao mesmo usuário"
+
+@enduml

@@ -1,0 +1,88 @@
+@startuml UC-Notificacoes
+
+!theme plain
+skinparam actorStyle awesome
+skinparam usecaseBorderColor #3D6B9E
+skinparam usecaseBackgroundColor #EDF4FD
+skinparam usecaseFontSize 12
+skinparam actorBorderColor #1A237E
+skinparam actorBackgroundColor #E8EAF6
+skinparam ArrowColor #3D6B9E
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+title <b>Casos de Uso — Notificações e Lembretes</b>\nNeuro-Gen · EPIC-03 + EPIC-12 (RF-03, RF-12.2)\nEntrega multi-canal com fallback automático
+
+left to right direction
+
+actor "Titular" as titular
+actor "Apoio\n(com permissão SEND_REMINDERS)" as apoio
+actor "Sistema\n(Notification Service + Scheduler)" as sistema
+
+rectangle "Sistema: Notificações" {
+
+    ' Configuração pelo Titular
+    usecase "Configurar canal\n(push / email / SMS)" as UC_CHANNEL
+    usecase "Configurar janela\nde silêncio (RF-03.8)" as UC_SILENCE
+    usecase "Confirmar lembrete\nrecebido" as UC_CONFIRM
+    usecase "Ver central de\nnotificações (30 dias)" as UC_CENTER
+
+    ' Apoio com permissão
+    usecase "Enviar lembrete\npontual ao Titular" as UC_APOIO_NUDGE
+
+    ' Sistema
+    usecase "Disparar lembrete\nagendado" as UC_FIRE
+    usecase "Repetir lembrete\n(nudge persistente)" as UC_NUDGE_REPEAT
+    usecase "Fallback por e-mail\nse push não confirmado" as UC_FALLBACK
+    usecase "Marcar 'não confirmado'\nno dashboard" as UC_UNCONFIRMED
+    usecase "Processar fila de\nenvio assíncrono" as UC_QUEUE
+}
+
+' Titular
+titular --> UC_CHANNEL
+titular --> UC_SILENCE
+titular --> UC_CONFIRM
+titular --> UC_CENTER
+
+' Apoio com permissão
+apoio --> UC_APOIO_NUDGE
+
+' Sistema
+sistema --> UC_FIRE
+sistema --> UC_NUDGE_REPEAT
+sistema --> UC_FALLBACK
+sistema --> UC_UNCONFIRMED
+sistema --> UC_QUEUE
+
+' Inclusões
+UC_FIRE .> UC_QUEUE : <<include>>\n(sempre via fila assíncrona)
+UC_APOIO_NUDGE .> UC_QUEUE : <<include>>\n(via fila)
+
+' Extensões
+UC_FIRE .> UC_NUDGE_REPEAT : <<extend>>\n(se persistent=true e não confirmado)
+UC_NUDGE_REPEAT .> UC_FALLBACK : <<extend>>\n(se push não confirmado em X min)
+UC_NUDGE_REPEAT .> UC_UNCONFIRMED : <<extend>>\n(após atingir maxRepetitions)
+
+note right of UC_APOIO_NUDGE
+  Disponível somente se permissão
+  SEND_REMINDERS estiver ativa
+  no vínculo. (RF-01.8)
+  Titular pode remover esta
+  permissão a qualquer momento.
+end note
+
+note right of UC_SILENCE
+  Janela de silêncio: ex. 22h–7h.
+  Notificações críticas (medicação)
+  continuam sendo entregues.
+  (RF-03.8)
+end note
+
+note bottom of UC_QUEUE
+  Fila RabbitMQ desacopla envio
+  do fluxo síncrono da API.
+  Suporta pico sem degradar
+  a API principal. (RNF-ESC.3, RF-12.2)
+end note
+
+@enduml
