@@ -1,0 +1,84 @@
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: neurogen-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-neurogen}
+      POSTGRES_USER: ${DB_USERNAME:-neurogen}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      # Bind loopback: a app acessa via rede interna do compose; não exponha ao host em prod
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - neurogen_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U neurogen -d neurogen"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # pgAdmin 4 — http://localhost:5050  |  admin@neurogen.local / admin
+  # ---------------------------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: neurogen-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+      PGADMIN_CONFIG_SERVER_MODE: "True"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "True"
+    ports:
+      - "127.0.0.1:5050:80"
+    volumes:
+      - neurogen_pgadmin:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Neuro-Gen Application
+  # Constrói a imagem localmente (Dockerfile) e sobe a aplicação já conectada
+  # ao postgres do compose. Flyway roda automaticamente no startup.
+  #
+  # Variáveis obrigatórias (sobreponha via .env ou variáveis de ambiente):
+  #   SENSITIVE_DATA_KEY  — chave AES-256 hex 64 chars  (NUNCA commitar a real)
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: neurogen-app
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_HOST: postgres
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-neurogen}
+      DB_USERNAME: ${DB_USERNAME:-neurogen}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_POOL_SIZE: 10
+      VAULT_DB_POOL_SIZE: 5
+      SENSITIVE_DATA_KEY: ${SENSITIVE_DATA_KEY}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health/liveness || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  neurogen_pg:
+  neurogen_pgadmin:

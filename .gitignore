@@ -34,3 +34,7 @@ build/
 
 CLAUDE.md
 /.claude
+
+### Secrets — nunca commitar ###
+.env
+*.env.local

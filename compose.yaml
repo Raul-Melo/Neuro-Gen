@@ -1,18 +1,53 @@
 services:
-  postgres:
-    image: 'postgres:16'
-    environment:
-      - 'POSTGRES_DB=neurogen'
-      - 'POSTGRES_USER=neurogen'
-      - 'POSTGRES_PASSWORD=secret'
-    ports:
-      # Porta fixada para alinhar com as URLs explícitas de datasource (core + vault).
-      - '5432:5432'
-    volumes:
-      - 'neurogen_pg:/var/lib/postgresql/data'
 
-# NOTA (ADR-005): em produção, o Vault DB é uma instância PostgreSQL SEPARADA, com
-# credenciais próprias e sem acesso de rede a partir dos demais serviços. Em dev usamos
-# a mesma instância com schema/datasource/credenciais lógicas isoladas (ng_vault).
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 — banco único de desenvolvimento (Core + Vault no mesmo server,
+  # schemas separados: ng_identity, ng_core, ng_sensitive, ng_audit, ng_vault).
+  # Em produção o Vault usa instância separada (ADR-005).
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: neurogen-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: neurogen
+      POSTGRES_USER: neurogen
+      POSTGRES_PASSWORD: secret
+    ports:
+      # Porta 5433 — evita conflito com PostgreSQL 19 local instalado em 5432.
+      # Bind no loopback: apenas a máquina local consegue alcançar o container.
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - neurogen_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U neurogen -d neurogen"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # pgAdmin 4 — interface web para inspecionar o banco durante desenvolvimento.
+  # Acesse: http://localhost:5050  |  Login: admin@neurogen.local / admin
+  # ---------------------------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: neurogen-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      # Senha lida de variável de ambiente — defina PGADMIN_PASSWORD no .env
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: "True"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "True"
+    ports:
+      - "127.0.0.1:5050:80"
+    volumes:
+      - neurogen_pgadmin:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   neurogen_pg:
+  neurogen_pgadmin:
