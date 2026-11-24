@@ -28,7 +28,8 @@ import javax.sql.DataSource;
                 "br.com.sentinelcorp.Neuro_Gen.link.infrastructure.persistence",
                 "br.com.sentinelcorp.Neuro_Gen.agenda.infrastructure.persistence",
                 "br.com.sentinelcorp.Neuro_Gen.focus.infrastructure.persistence",
-                "br.com.sentinelcorp.Neuro_Gen.emotional.infrastructure.persistence"
+                "br.com.sentinelcorp.Neuro_Gen.emotional.infrastructure.persistence",
+                "br.com.sentinelcorp.Neuro_Gen.shared.audit.infrastructure"
         },
         entityManagerFactoryRef = "entityManagerFactory",
         transactionManagerRef = "transactionManager")
@@ -61,7 +62,8 @@ public class CoreDataSourceConfig {
                         "br.com.sentinelcorp.Neuro_Gen.link.infrastructure.persistence",
                         "br.com.sentinelcorp.Neuro_Gen.agenda.infrastructure.persistence",
                         "br.com.sentinelcorp.Neuro_Gen.focus.infrastructure.persistence",
-                        "br.com.sentinelcorp.Neuro_Gen.emotional.infrastructure.persistence")
+                        "br.com.sentinelcorp.Neuro_Gen.emotional.infrastructure.persistence",
+                        "br.com.sentinelcorp.Neuro_Gen.shared.audit.infrastructure")
                 .persistenceUnit("core")
                 .build();
     }
