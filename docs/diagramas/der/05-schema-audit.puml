@@ -1,0 +1,131 @@
+@startuml DER-Schema-Audit
+
+!theme plain
+skinparam EntityBorderColor #7B3F00
+skinparam EntityBackgroundColor #FDF6EC
+skinparam EntityFontSize 13
+skinparam ArrowColor #7B3F00
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+skinparam linetype ortho
+
+title <b>DER — Schema: ng_audit</b>\nNeuro-Gen · Auditoria Imutável de Banco e Sistema\nPostgreSQL 16 — RNF-SEC.8 / RNF-PRIV.8 / LGPD art. 37
+
+note as N_AUDIT
+  Schema: ng_audit
+  Duas tabelas, ambas imutáveis:
+    - ng_db_audit   → alimentada por triggers PostgreSQL (síncrono)
+    - ng_system_logs → alimentada por AuditService Java (@Async)
+  UPDATE e DELETE lançam exceção SQLSTATE 55000
+  em nível de banco (fn_block_audit_mutations).
+  Retenção mínima: 12 meses (RNF-SEC.8).
+end note
+
+' ============================================================
+' ng_db_audit — Auditoria de banco de dados.
+' Alimentada automaticamente por triggers em todas as tabelas
+' críticas (V5__schema_audit.sql). Colunas sensíveis são
+' removidas por fn_capture_dml_redacted antes de gravar.
+' ============================================================
+entity "ng_db_audit" as db_audit {
+    * id : uuid <<PK, DEFAULT gen_random_uuid()>>
+    --
+    * occurred_at : timestamptz <<DEFAULT NOW()>>
+    * operation : varchar(10)
+    * schema_name : varchar(63)
+    * table_name : varchar(63)
+    record_id : text
+    old_data : jsonb
+    new_data : jsonb
+    * db_user : varchar(128) <<DEFAULT current_user>>
+    app_user_id : uuid
+    client_addr : inet
+    * tx_id : bigint <<DEFAULT txid_current()>>
+}
+
+note right of db_audit
+  operation: INSERT | UPDATE | DELETE
+  record_id: valor da PK da linha afetada.
+  old_data/new_data: snapshot JSONB.
+  Colunas removidas em tabelas sensíveis:
+    password_hash, refresh_token_hash,
+    token_hash, encrypted_secret.
+  app_user_id: propagado pela app via
+    SET LOCAL app.current_user_id.
+  Índices:
+    (schema_name, table_name, occurred_at DESC)
+    (app_user_id, occurred_at DESC)
+    (table_name, record_id)
+    (tx_id)
+end note
+
+' ============================================================
+' ng_system_logs — Logs de aplicação e eventos de domínio.
+' Alimentada por AuditService (@Async) via SystemLogPort.
+' Falha ao persistir NÃO reverte a operação original.
+' ============================================================
+entity "ng_system_logs" as sys_logs {
+    * id : uuid <<PK, DEFAULT gen_random_uuid()>>
+    --
+    * logged_at : timestamptz <<DEFAULT NOW()>>
+    * level : varchar(10)
+    logger_name : varchar(255)
+    * message : text
+    stack_trace : text
+    trace_id : varchar(64)
+    span_id : varchar(32)
+    user_id : uuid
+    request_path : varchar(512)
+    http_method : varchar(10)
+    http_status : smallint
+    duration_ms : integer
+    ip_address : varchar(64)
+    user_agent : varchar(512)
+    action : varchar(80)
+    resource_type : varchar(80)
+    resource_id : text
+    metadata : jsonb
+}
+
+note right of sys_logs
+  level: TRACE|DEBUG|INFO|WARN|ERROR|FATAL
+  Métodos de AuditService que populam esta tabela:
+    logAction()   → ações de domínio
+    logHttp()     → requisições HTTP
+    logError()    → exceções não tratadas
+    logSecurity() → login, logout, 2FA, negações
+  trace_id/span_id: integração com
+    Micrometer / OpenTelemetry.
+  Índices:
+    (logged_at DESC)
+    (level, logged_at DESC)
+    (user_id, logged_at DESC)
+    (action, logged_at DESC)
+    (trace_id)
+    (http_status, logged_at DESC)
+end note
+
+' ============================================================
+' TRIGGERS NAS TABELAS CRÍTICAS (referência)
+' fn_capture_dml_redacted: tabelas com colunas sensíveis
+' fn_capture_dml:          demais tabelas
+' ============================================================
+note as N_TRIGGERS
+  Tabelas com trigger fn_capture_dml_redacted:
+    ng_identity.ng_users
+    ng_identity.ng_sessions
+    ng_identity.ng_totp_secrets
+    ng_identity.ng_password_resets
+
+  Tabelas com trigger fn_capture_dml:
+    ng_identity.ng_consent_records
+    ng_identity.ng_audit_logs
+    ng_core.ng_support_links
+    ng_core.ng_link_permissions
+    ng_core.ng_events
+    ng_core.ng_tasks
+    ng_core.ng_focus_sessions
+    ng_sensitive.ng_mood_checkins
+end note
+
+@enduml

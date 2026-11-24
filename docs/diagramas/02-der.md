@@ -9,10 +9,12 @@
 > - `ng_identity` — autenticação, sessões, auditoria de acesso
 > - `ng_core` — dados operacionais (agenda, tarefas, vínculos, foco)
 > - `ng_sensitive` — dados sensíveis de saúde LGPD (humor, diário, perfil)
+> - `ng_audit` — auditoria imutável: `ng_db_audit` (triggers) + `ng_system_logs` (AuditService)
 > - `ng_vault` *(banco separado)* — cofre zero-knowledge
 >
 > Todas as tabelas possuem: `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`  
-> Tabelas mutáveis possuem: `updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
+> Tabelas mutáveis possuem: `updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`  
+> Tabelas de auditoria são **append-only**: triggers bloqueiam UPDATE e DELETE (`SQLSTATE 55000`)
 
 ---
 
@@ -437,6 +439,68 @@ erDiagram
 
 ---
 
+## Schema: ng_audit (Auditoria Imutável)
+
+> **Imutabilidade garantida em nível de banco** via trigger `fn_block_audit_mutations`.  
+> `ng_db_audit` → alimentada por triggers PostgreSQL (síncrono, mesma transação).  
+> `ng_system_logs` → alimentada por `AuditService` Java via `SystemLogPort` (`@Async`).  
+> Retenção mínima: 12 meses (RNF-SEC.8 / LGPD art. 37).
+
+```mermaid
+erDiagram
+
+    %% ============================================================
+    %% ng_db_audit — Registro imutável de DML nas tabelas críticas.
+    %% Alimentado por triggers individuais (V5__schema_audit.sql).
+    %% Colunas sensíveis removidas por fn_capture_dml_redacted.
+    %% ============================================================
+    ng_db_audit {
+        uuid id PK "DEFAULT gen_random_uuid()"
+        timestamptz occurred_at "NOT NULL DEFAULT NOW()"
+        varchar operation "INSERT | UPDATE | DELETE"
+        varchar schema_name "NOT NULL"
+        varchar table_name "NOT NULL"
+        text record_id "PK da linha afetada"
+        jsonb old_data "NULL em INSERT"
+        jsonb new_data "NULL em DELETE"
+        varchar db_user "NOT NULL DEFAULT current_user"
+        uuid app_user_id "ID JWT, se propagado"
+        inet client_addr "IP do cliente de banco"
+        bigint tx_id "NOT NULL DEFAULT txid_current()"
+    }
+
+    %% ============================================================
+    %% ng_system_logs — Logs de aplicação e eventos de domínio.
+    %% Escritos assincronamente por AuditService (@Async).
+    %% Falha ao persistir NÃO reverte a operação original.
+    %% ============================================================
+    ng_system_logs {
+        uuid id PK "DEFAULT gen_random_uuid()"
+        timestamptz logged_at "NOT NULL DEFAULT NOW()"
+        varchar level "NOT NULL — TRACE|DEBUG|INFO|WARN|ERROR|FATAL"
+        varchar logger_name "Classe Java que gerou o log"
+        text message "NOT NULL"
+        text stack_trace "NULL — somente ERROR/FATAL, max 8k chars"
+        varchar trace_id "Micrometer/OpenTelemetry trace"
+        varchar span_id "Span ID do trace"
+        uuid user_id "Usuário autenticado"
+        varchar request_path "Path HTTP"
+        varchar http_method "GET|POST|PUT|PATCH|DELETE"
+        smallint http_status "Código de resposta"
+        integer duration_ms "Tempo de resposta"
+        varchar ip_address "IP do cliente HTTP"
+        varchar user_agent "User-Agent do cliente"
+        varchar action "Ação semântica — USER_LOGIN, VAULT_OPENED, etc."
+        varchar resource_type "Tipo do recurso afetado"
+        text resource_id "ID do recurso afetado"
+        jsonb metadata "Dados adicionais contextuais"
+    }
+```
+
+> **Consulte** `docs/integracao/api-audit.md` para queries de referência e tabela completa de ações registradas.
+
+---
+
 ## Schema: ng_vault (Banco PostgreSQL Separado — Zero-Knowledge)
 
 > **Banco PostgreSQL completamente separado** do Core DB (ADR-005).
@@ -522,3 +586,13 @@ erDiagram
 | `ng_mood_checkins` | `(user_id, checkin_date DESC)` | B-tree | Dashboard de tendência |
 | `ng_vault_entries` | `(owner_id)` | B-tree | Listar entradas do usuário |
 | `ng_vault_auth_logs` | `(user_id, attempted_at DESC)` | B-tree | Auditoria de segurança |
+| `ng_db_audit` | `(schema_name, table_name, occurred_at DESC)` | B-tree | Histórico de uma tabela |
+| `ng_db_audit` | `(app_user_id, occurred_at DESC)` | B-tree | Auditoria por usuário |
+| `ng_db_audit` | `(table_name, record_id)` | B-tree | Histórico de um registro específico |
+| `ng_db_audit` | `(tx_id)` | B-tree | Rastrear transação completa |
+| `ng_system_logs` | `(logged_at DESC)` | B-tree | Log mais recente |
+| `ng_system_logs` | `(level, logged_at DESC)` | B-tree | Filtrar por severidade |
+| `ng_system_logs` | `(user_id, logged_at DESC)` | B-tree | Histórico de um usuário |
+| `ng_system_logs` | `(action, logged_at DESC)` | B-tree | Eventos de um tipo específico |
+| `ng_system_logs` | `(trace_id)` | B-tree | Rastreamento distribuído |
+| `ng_system_logs` | `(http_status, logged_at DESC)` | B-tree | Análise de erros HTTP |

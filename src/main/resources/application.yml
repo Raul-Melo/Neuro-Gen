@@ -2,9 +2,16 @@ spring:
   application:
     name: Neuro-Gen
 
+  docker:
+    compose:
+      # Desabilitado em dev: o banco é gerenciado manualmente via "docker compose up".
+      # O Spring tentaria chamar o CLI "docker" que não está no PATH do processo Java.
+      enabled: false
+
   # Datasource do Core (schemas ng_identity, ng_core, ng_sensitive)
   datasource:
-    url: jdbc:postgresql://localhost:5432/neurogen
+    # Porta 5433: PostgreSQL 16 Docker (5432 ocupada pelo PostgreSQL 19 local do Windows)
+    url: jdbc:postgresql://localhost:5433/neurogen
     username: neurogen
     password: secret
     hikari:
@@ -25,14 +32,14 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
-    schemas: ng_identity,ng_core,ng_sensitive
+    schemas: ng_identity,ng_core,ng_sensitive,ng_audit
     default-schema: ng_core
     create-schemas: true
 
 # Datasource ISOLADO do Vault (ADR-005). Em produção: instância/credenciais separadas.
 vault:
   datasource:
-    url: jdbc:postgresql://localhost:5432/neurogen
+    url: jdbc:postgresql://localhost:5433/neurogen
     username: neurogen
     password: secret
     hikari:
@@ -43,6 +50,11 @@ vault:
 
 # Configuração da aplicação (JWT, cifra de coluna de dados sensíveis)
 neurogen:
+  cors:
+    # Origens permitidas para o frontend. Em produção, substitua pelo domínio real.
+    allowed-origins:
+      - http://localhost:3000
+      - http://localhost:5173
   security:
     jwt:
       issuer: https://neuro-gen.sentinelcorp.com.br
