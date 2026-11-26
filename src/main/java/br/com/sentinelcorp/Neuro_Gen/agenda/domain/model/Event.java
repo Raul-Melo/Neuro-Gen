@@ -87,6 +87,17 @@ public class Event extends AggregateRoot {
         this.audit = audit.touch(ownerId.asString());
     }
 
+    public void updateDetails(String title, String description, EventType type,
+                              CategoryId categoryId, boolean sharedWithSupport) {
+        requireNotCancelled();
+        this.title = AgendaTitle.validate(title);
+        this.description = description;
+        if (type != null) this.type = type;
+        this.categoryId = categoryId;
+        this.sharedWithSupport = sharedWithSupport;
+        this.audit = audit.touch(ownerId.asString());
+    }
+
     private void requireNotCancelled() {
         if (isCancelled()) {
             throw new EventAlreadyCancelledException(id.asString());

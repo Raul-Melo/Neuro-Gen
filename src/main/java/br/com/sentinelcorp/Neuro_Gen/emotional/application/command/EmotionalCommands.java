@@ -11,4 +11,13 @@ public final class EmotionalCommands {
 
     public record WriteJournalCommand(String userId, String content, String relatedCheckInId) {
     }
+
+    public record EditJournalCommand(String userId, String entryId, String content) {
+    }
+
+    public record DeleteCheckInCommand(String userId, String checkInId) {
+    }
+
+    public record DeleteJournalCommand(String userId, String entryId) {
+    }
 }

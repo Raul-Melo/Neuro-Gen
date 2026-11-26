@@ -17,6 +17,10 @@ public record JournalEntryId(UUID value) {
         return new JournalEntryId(UUID.randomUUID());
     }
 
+    public static JournalEntryId of(String s) {
+        return new JournalEntryId(UUID.fromString(s));
+    }
+
     public String asString() {
         return value.toString();
     }

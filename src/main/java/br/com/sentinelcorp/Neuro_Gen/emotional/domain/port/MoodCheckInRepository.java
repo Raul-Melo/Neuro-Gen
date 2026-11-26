@@ -17,4 +17,6 @@ public interface MoodCheckInRepository {
     List<MoodCheckIn> findByUserAndPeriod(UserId userId, LocalDate from, LocalDate to);
 
     Optional<MoodCheckIn> findTodayByUserId(UserId userId);
+
+    void delete(MoodCheckInId id);
 }

@@ -39,6 +39,17 @@ public class LinkLifecycleUseCase {
     }
 
     @Transactional(readOnly = true)
+    public LinkResult getById(String linkId, String requesterId) {
+        SupportLink link = links.findById(LinkId.of(linkId))
+                .orElseThrow(() -> new NotFoundException("Vínculo", linkId));
+        UserId uid = UserId.of(requesterId);
+        if (!link.titularId().equals(uid) && !uid.equals(link.apoioId())) {
+            throw new ForbiddenAccessException("Vínculo", "não pertence ao usuário");
+        }
+        return LinkResult.from(link);
+    }
+
+    @Transactional(readOnly = true)
     public List<LinkResult> listByTitular(UserId titularId) {
         return links.findActiveByTitularId(titularId).stream().map(LinkResult::from).toList();
     }

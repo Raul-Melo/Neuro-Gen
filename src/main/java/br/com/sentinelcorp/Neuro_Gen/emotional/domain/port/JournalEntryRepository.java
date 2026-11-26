@@ -14,4 +14,6 @@ public interface JournalEntryRepository {
     Optional<JournalEntry> findById(JournalEntryId id);
 
     List<JournalEntry> findByUserId(UserId userId);
+
+    void delete(JournalEntryId id);
 }

@@ -52,6 +52,11 @@ public class JournalEntryRepositoryAdapter implements JournalEntryRepository {
         return jpa.findByUserIdOrderByEntryDateDesc(userId.value()).stream().map(this::toDomain).toList();
     }
 
+    @Override
+    public void delete(JournalEntryId id) {
+        jpa.deleteById(id.value());
+    }
+
     private JournalEntry toDomain(JournalEntryEntity e) {
         String content = cipher.decryptFromBase64(new String(e.getContentEnc(), StandardCharsets.UTF_8));
         Instant created = e.getCreatedAt();

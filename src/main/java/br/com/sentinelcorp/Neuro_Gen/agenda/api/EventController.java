@@ -1,11 +1,14 @@
 package br.com.sentinelcorp.Neuro_Gen.agenda.api;
 
 import br.com.sentinelcorp.Neuro_Gen.agenda.api.dto.CreateEventRequest;
+import br.com.sentinelcorp.Neuro_Gen.agenda.api.dto.ReminderRequest;
 import br.com.sentinelcorp.Neuro_Gen.agenda.api.dto.RescheduleEventRequest;
+import br.com.sentinelcorp.Neuro_Gen.agenda.api.dto.UpdateEventRequest;
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.EventUseCase;
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.command.AgendaCommands.CreateEventCommand;
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.command.AgendaCommands.ReminderInput;
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.command.AgendaCommands.RescheduleEventCommand;
+import br.com.sentinelcorp.Neuro_Gen.agenda.application.command.AgendaCommands.UpdateEventCommand;
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.result.EventResult;
 import br.com.sentinelcorp.Neuro_Gen.shared.security.CurrentUser;
 import io.swagger.v3.oas.annotations.Operation;
@@ -43,12 +46,26 @@ public class EventController {
     @Operation(summary = "Cria um evento")
     public ResponseEntity<EventResult> create(@Valid @RequestBody CreateEventRequest req) {
         List<ReminderInput> reminders = req.reminders() == null ? List.of()
-                : req.reminders().stream().map(r -> r.toInput()).toList();
+                : req.reminders().stream().map(ReminderRequest::toInput).toList();
         EventResult result = events.create(new CreateEventCommand(
                 CurrentUser.requireId().asString(), req.title(), req.description(),
                 req.startAt(), req.endAt(), req.rrule(), req.type(), req.categoryId(),
                 req.sharedWithSupport(), reminders));
         return ResponseEntity.status(HttpStatus.CREATED).body(result);
+    }
+
+    @GetMapping("/{id}")
+    @Operation(summary = "Busca um evento por ID")
+    public EventResult findById(@PathVariable String id) {
+        return events.findById(id, CurrentUser.requireId().asString());
+    }
+
+    @PutMapping("/{id}")
+    @Operation(summary = "Atualiza título, descrição, tipo, categoria e compartilhamento")
+    public EventResult update(@PathVariable String id, @Valid @RequestBody UpdateEventRequest req) {
+        return events.update(new UpdateEventCommand(
+                id, CurrentUser.requireId().asString(),
+                req.title(), req.description(), req.type(), req.categoryId(), req.sharedWithSupport()));
     }
 
     @PutMapping("/{id}/reschedule")
@@ -64,6 +81,18 @@ public class EventController {
                                        @RequestParam(defaultValue = "THIS_OCCURRENCE") String scope) {
         events.cancel(id, CurrentUser.requireId().asString(), scope);
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{id}/reminders")
+    @Operation(summary = "Adiciona um lembrete ao evento")
+    public EventResult addReminder(@PathVariable String id, @Valid @RequestBody ReminderRequest req) {
+        return events.addReminder(id, CurrentUser.requireId().asString(), req.toInput());
+    }
+
+    @DeleteMapping("/{id}/reminders/{reminderId}")
+    @Operation(summary = "Remove um lembrete do evento")
+    public EventResult removeReminder(@PathVariable String id, @PathVariable String reminderId) {
+        return events.removeReminder(id, CurrentUser.requireId().asString(), reminderId);
     }
 
     @DeleteMapping("/{id}")

@@ -73,6 +73,12 @@ public class FocusSessionRepositoryAdapter implements FocusSessionRepository {
                 .stream().map(this::toDomain).toList();
     }
 
+    @Override
+    public void delete(FocusSessionId id) {
+        pauseJpa.deleteBySessionId(id.value());
+        sessionJpa.deleteById(id.value());
+    }
+
     private FocusSession toDomain(FocusSessionEntity e) {
         List<PauseRecord> pauses = pauseJpa.findBySessionIdOrderByPausedAt(e.getId()).stream()
                 .map(p -> new PauseRecord(p.getPausedAt(), p.getResumedAt()))

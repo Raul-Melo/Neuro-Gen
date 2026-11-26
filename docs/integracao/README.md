@@ -230,35 +230,60 @@ Em produção, defina a variável de ambiente `NEUROGEN_CORS_ALLOWED_ORIGINS` co
 ## Endpoints por módulo
 
 | Módulo | Base URL | Autenticação | Referência |
-|---|---|---|---|
+|--------|----------|--------------|------------|
+| Utilitários Dev | `/api/v1/dev` | Pública | [api-identity.md](api-identity.md) |
 | Autenticação | `/api/v1/auth` | Pública (exceto logout) | [api-identity.md](api-identity.md) |
-| Perfil | `/api/v1/users` | JWT Bearer | [api-identity.md](api-identity.md) |
-| Vínculo | `/api/v1/links` | JWT Bearer | [api-link.md](api-link.md) |
-| Cofre | `/api/v1/vault` | JWT Bearer (somente TITULAR) | [api-vault.md](api-vault.md) |
+| Perfil + 2FA | `/api/v1/users` | JWT Bearer | [api-identity.md](api-identity.md) |
+| Vínculo Titular/Apoio | `/api/v1/links` | JWT Bearer | [api-link.md](api-link.md) |
 | Agenda — Eventos | `/api/v1/events` | JWT Bearer | [api-agenda.md](api-agenda.md) |
 | Agenda — Tarefas | `/api/v1/tasks` | JWT Bearer | [api-agenda.md](api-agenda.md) |
-| Foco | `/api/v1/focus` | JWT Bearer | [api-focus.md](api-focus.md) |
-| Emocional | `/api/v1/emotional` | JWT Bearer | [api-emotional.md](api-emotional.md) |
-| Auditoria | `ng_audit.*` (banco) | — consulta direta | [api-audit.md](api-audit.md) |
+| Sessões de Foco | `/api/v1/focus` | JWT Bearer | [api-focus.md](api-focus.md) |
+| Regulação Emocional | `/api/v1/emotional` | JWT Bearer | [api-emotional.md](api-emotional.md) |
+| Cofre Zero-Knowledge | `/api/v1/vault` | JWT Bearer (somente TITULAR) | [api-vault.md](api-vault.md) |
+| Auditoria | `ng_audit.*` (banco) | Consulta direta | [api-audit.md](api-audit.md) |
+
+### Cobertura CRUD por módulo
+
+| Módulo | Create | Read by ID | List | Update | Delete | Observação |
+|--------|--------|-----------|------|--------|--------|-----------|
+| identity | ✅ POST /auth/register | ✅ GET /users/me | — | ✅ PUT /users/me | — | 2FA: fluxo enable→setup(1x)→confirm |
+| link | ✅ POST /links | ✅ GET /links/{id} | ✅ GET /links | ✅ PATCH /links/{id}/permissions | ✅ DELETE (revogação lógica) | |
+| events | ✅ POST /events | ✅ GET /events/{id} | ✅ GET /events | ✅ PUT /events/{id} | ✅ DELETE /events/{id} | + lembretes: POST/DELETE /{id}/reminders |
+| tasks | ✅ POST /tasks | ✅ GET /tasks/{id} | ✅ GET /tasks | ✅ PUT /tasks/{id} | ✅ DELETE (soft) | + subtarefas e lembretes |
+| focus | ✅ POST /sessions | ✅ GET /sessions/{id} | ✅ GET /sessions | ✅ POST /*/pause/resume/complete | ✅ DELETE /sessions/{id} | máquina de estados |
+| emotional (checkins) | ✅ POST /checkins | ✅ GET /checkins/{id} | ✅ GET /checkins | — (imutável) | ✅ DELETE /checkins/{id} | máx. 1/dia; AES-256-GCM |
+| emotional (journal) | ✅ POST /journal | ✅ GET /journal/{id} | ✅ GET /journal | ✅ PUT /journal/{id} | ✅ DELETE /journal/{id} | cifrado em repouso |
+| vault | ✅ POST /entries | ✅ GET /entries/{id} | ✅ GET /entries | ✅ PUT /entries/{id} | ✅ DELETE /entries/{id} | zero-knowledge; apenas TITULAR |
 
 ---
 
 ## Fluxo de autenticação
 
 ```
-POST /api/v1/auth/register      →  cria conta (PENDING_VERIFICATION)
-POST /api/v1/auth/verify-email  →  ativa conta (ACTIVE)
+POST /api/v1/auth/register      →  cria conta com e-mail, senha, CPF e data de nascimento
+                                    (status: PENDING_VERIFICATION)
+POST /api/v1/auth/verify-email  →  ativa conta (status: ACTIVE)
 POST /api/v1/auth/login         →  retorna { accessToken, refreshToken, expiresIn }
 ```
 
-> Em desenvolvimento, o token de verificação de e-mail é **exibido no console** da aplicação (LoggingEmailSender). Procure por `[EMAIL]` nos logs após o registro.
+> Em desenvolvimento, obtenha o token de verificação via `GET /api/v1/dev/verification-token?email=<email>` — sem precisar verificar o console.
 
 > Contas com status `PENDING_VERIFICATION` conseguem fazer login — a verificação de e-mail não é pré-requisito obrigatório para autenticação.
 
-Se TOTP estiver habilitado, o login retorna `403 TotpRequired`; reenvie com o campo `totpCode` preenchido:
+Se TOTP estiver habilitado (`totpEnabled: true`), o login retorna `403 TotpRequired`; reenvie com o campo `totpCode` preenchido:
 
 ```json
 { "email": "...", "password": "...", "totpCode": "123456" }
+```
+
+### Fluxo do 2FA (TOTP)
+
+```
+POST /api/v1/users/me/totp         →  gera segredo (hasPendingTotpSetup: true)
+GET  /api/v1/users/me/totp/setup   →  retorna otpauthUri + secret — UMA ÚNICA VEZ
+                                       (escaneie o QR com Google Authenticator / Authy)
+POST /api/v1/users/me/totp/confirm →  valida primeiro código → ativa 2FA (totpEnabled: true)
+DELETE /api/v1/users/me/totp       →  desativa 2FA (exige código atual)
 ```
 
 ```

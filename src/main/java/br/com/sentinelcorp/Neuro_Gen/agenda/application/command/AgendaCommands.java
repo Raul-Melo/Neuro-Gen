@@ -28,4 +28,13 @@ public final class AgendaCommands {
                                     LocalDate dueDate, String categoryId, boolean sharedWithSupport,
                                     List<ReminderInput> reminders) {
     }
+
+    public record UpdateEventCommand(String eventId, String ownerId, String title, String description,
+                                     String type, String categoryId, boolean sharedWithSupport) {
+    }
+
+    public record UpdateTaskCommand(String taskId, String ownerId, String title, String description,
+                                    String priority, LocalDate dueDate, String categoryId,
+                                    boolean sharedWithSupport) {
+    }
 }

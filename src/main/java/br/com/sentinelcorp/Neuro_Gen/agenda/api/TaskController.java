@@ -2,9 +2,12 @@ package br.com.sentinelcorp.Neuro_Gen.agenda.api;
 
 import br.com.sentinelcorp.Neuro_Gen.agenda.api.dto.AddSubtaskRequest;
 import br.com.sentinelcorp.Neuro_Gen.agenda.api.dto.CreateTaskRequest;
+import br.com.sentinelcorp.Neuro_Gen.agenda.api.dto.ReminderRequest;
+import br.com.sentinelcorp.Neuro_Gen.agenda.api.dto.UpdateTaskRequest;
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.TaskUseCase;
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.command.AgendaCommands.CreateTaskCommand;
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.command.AgendaCommands.ReminderInput;
+import br.com.sentinelcorp.Neuro_Gen.agenda.application.command.AgendaCommands.UpdateTaskCommand;
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.result.TaskResult;
 import br.com.sentinelcorp.Neuro_Gen.shared.security.CurrentUser;
 import io.swagger.v3.oas.annotations.Operation;
@@ -16,6 +19,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -39,7 +43,7 @@ public class TaskController {
     @Operation(summary = "Cria uma tarefa")
     public ResponseEntity<TaskResult> create(@Valid @RequestBody CreateTaskRequest req) {
         List<ReminderInput> reminders = req.reminders() == null ? List.of()
-                : req.reminders().stream().map(r -> r.toInput()).toList();
+                : req.reminders().stream().map(ReminderRequest::toInput).toList();
         TaskResult result = tasks.create(new CreateTaskCommand(
                 CurrentUser.requireId().asString(), req.title(), req.description(), req.priority(),
                 req.dueDate(), req.categoryId(), req.sharedWithSupport(), reminders));
@@ -50,6 +54,21 @@ public class TaskController {
     @Operation(summary = "Lista tarefas do usuário (opcionalmente filtradas por status)")
     public List<TaskResult> list(@RequestParam(required = false) String status) {
         return tasks.list(CurrentUser.requireId().asString(), status);
+    }
+
+    @GetMapping("/{id}")
+    @Operation(summary = "Busca uma tarefa por ID")
+    public TaskResult findById(@PathVariable String id) {
+        return tasks.findById(id, CurrentUser.requireId().asString());
+    }
+
+    @PutMapping("/{id}")
+    @Operation(summary = "Atualiza título, descrição, prioridade, prazo, categoria e compartilhamento")
+    public TaskResult update(@PathVariable String id, @Valid @RequestBody UpdateTaskRequest req) {
+        return tasks.update(new UpdateTaskCommand(
+                id, CurrentUser.requireId().asString(),
+                req.title(), req.description(), req.priority(),
+                req.dueDate(), req.categoryId(), req.sharedWithSupport()));
     }
 
     @PostMapping("/{id}/complete")
@@ -80,6 +99,24 @@ public class TaskController {
     @Operation(summary = "Conclui uma subtarefa")
     public TaskResult completeSubtask(@PathVariable String id, @PathVariable String subtaskId) {
         return tasks.completeSubtask(id, CurrentUser.requireId().asString(), subtaskId);
+    }
+
+    @DeleteMapping("/{id}/subtasks/{subtaskId}")
+    @Operation(summary = "Remove uma subtarefa")
+    public TaskResult removeSubtask(@PathVariable String id, @PathVariable String subtaskId) {
+        return tasks.removeSubtask(id, CurrentUser.requireId().asString(), subtaskId);
+    }
+
+    @PostMapping("/{id}/reminders")
+    @Operation(summary = "Adiciona um lembrete à tarefa")
+    public TaskResult addReminder(@PathVariable String id, @Valid @RequestBody ReminderRequest req) {
+        return tasks.addReminder(id, CurrentUser.requireId().asString(), req.toInput());
+    }
+
+    @DeleteMapping("/{id}/reminders/{reminderId}")
+    @Operation(summary = "Remove um lembrete da tarefa")
+    public TaskResult removeReminder(@PathVariable String id, @PathVariable String reminderId) {
+        return tasks.removeReminder(id, CurrentUser.requireId().asString(), reminderId);
     }
 
     @DeleteMapping("/{id}")

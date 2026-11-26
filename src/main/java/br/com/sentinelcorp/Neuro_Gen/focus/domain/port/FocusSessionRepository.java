@@ -18,4 +18,6 @@ public interface FocusSessionRepository {
     Optional<FocusSession> findActiveByUserId(UserId userId);
 
     List<FocusSession> findByUserIdAndPeriod(UserId userId, Instant from, Instant to);
+
+    void delete(FocusSessionId id);
 }

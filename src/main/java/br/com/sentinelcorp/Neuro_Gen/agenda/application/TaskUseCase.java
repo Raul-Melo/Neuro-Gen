@@ -1,9 +1,11 @@
 package br.com.sentinelcorp.Neuro_Gen.agenda.application;
 
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.command.AgendaCommands.CreateTaskCommand;
+import br.com.sentinelcorp.Neuro_Gen.agenda.application.command.AgendaCommands.UpdateTaskCommand;
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.command.AgendaCommands.ReminderInput;
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.result.TaskResult;
 import br.com.sentinelcorp.Neuro_Gen.agenda.domain.exception.TaskNotFoundException;
+import br.com.sentinelcorp.Neuro_Gen.agenda.domain.model.CategoryId;
 import br.com.sentinelcorp.Neuro_Gen.agenda.domain.model.CategoryId;
 import br.com.sentinelcorp.Neuro_Gen.agenda.domain.model.Priority;
 import br.com.sentinelcorp.Neuro_Gen.agenda.domain.model.Reminder;
@@ -75,6 +77,43 @@ public class TaskUseCase {
     public TaskResult completeSubtask(String taskId, String ownerId, String subtaskId) {
         Task task = load(taskId, ownerId);
         task.completeSubtask(UUID.fromString(subtaskId));
+        return TaskResult.from(tasks.save(task));
+    }
+
+    @Transactional(readOnly = true)
+    public TaskResult findById(String taskId, String ownerId) {
+        return TaskResult.from(load(taskId, ownerId));
+    }
+
+    @Transactional
+    public TaskResult update(UpdateTaskCommand cmd) {
+        Task task = load(cmd.taskId(), cmd.ownerId());
+        task.updateDetails(
+                cmd.title(), cmd.description(),
+                cmd.priority() == null ? null : Priority.valueOf(cmd.priority()),
+                cmd.dueDate(), CategoryId.of(cmd.categoryId()), cmd.sharedWithSupport());
+        return TaskResult.from(tasks.save(task));
+    }
+
+    @Transactional
+    public TaskResult removeSubtask(String taskId, String ownerId, String subtaskId) {
+        Task task = load(taskId, ownerId);
+        task.removeSubtask(UUID.fromString(subtaskId));
+        return TaskResult.from(tasks.save(task));
+    }
+
+    @Transactional
+    public TaskResult addReminder(String taskId, String ownerId, ReminderInput input) {
+        Task task = load(taskId, ownerId);
+        task.addReminder(Reminder.create(input.minutesBefore(), input.persistent(),
+                input.repeatIntervalMinutes(), input.maxRepetitions()));
+        return TaskResult.from(tasks.save(task));
+    }
+
+    @Transactional
+    public TaskResult removeReminder(String taskId, String ownerId, String reminderId) {
+        Task task = load(taskId, ownerId);
+        task.removeReminder(UUID.fromString(reminderId));
         return TaskResult.from(tasks.save(task));
     }
 

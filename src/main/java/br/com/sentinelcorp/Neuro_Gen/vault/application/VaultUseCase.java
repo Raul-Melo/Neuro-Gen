@@ -108,6 +108,14 @@ public class VaultUseCase {
     }
 
     @Transactional(value = "vaultTransactionManager", readOnly = true)
+    public VaultEntryResult getEntry(String vaultSessionToken, String entryId) {
+        UserId userId = requireSession(vaultSessionToken);
+        VaultEntry entry = loadOwned(entryId, userId);
+        audit.log(userId, "ENTRY_READ", null, null, true, null);
+        return VaultEntryResult.from(entry);
+    }
+
+    @Transactional(value = "vaultTransactionManager", readOnly = true)
     public List<VaultEntryResult> listEntries(String vaultSessionToken) {
         UserId userId = requireSession(vaultSessionToken);
         audit.log(userId, "ENTRY_READ", null, null, true, null);

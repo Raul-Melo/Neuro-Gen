@@ -103,6 +103,36 @@ public class Task extends AggregateRoot {
         this.audit = audit.touch(ownerId.asString());
     }
 
+    public void removeSubtask(UUID subtaskId) {
+        boolean removed = subtasks.removeIf(s -> s.id().equals(subtaskId));
+        if (!removed) throw new NotFoundException("Subtarefa", subtaskId.toString());
+        this.audit = audit.touch(ownerId.asString());
+    }
+
+    public void addReminder(Reminder reminder) {
+        if (dueDate != null) {
+            reminder.schedule(dueDate.atStartOfDay(java.time.ZoneOffset.UTC).toInstant());
+        }
+        this.reminders.add(reminder);
+        this.audit = audit.touch(ownerId.asString());
+    }
+
+    public void removeReminder(UUID reminderId) {
+        this.reminders.removeIf(r -> r.id().equals(reminderId));
+        this.audit = audit.touch(ownerId.asString());
+    }
+
+    public void updateDetails(String title, String description, Priority priority,
+                              LocalDate dueDate, CategoryId categoryId, boolean sharedWithSupport) {
+        this.title = AgendaTitle.validate(title);
+        this.description = description;
+        if (priority != null) this.priority = priority;
+        this.dueDate = dueDate;
+        this.categoryId = categoryId;
+        this.sharedWithSupport = sharedWithSupport;
+        this.audit = audit.touch(ownerId.asString());
+    }
+
     public int completionPercentage() {
         if (subtasks.isEmpty()) {
             return status == TaskStatus.DONE ? 100 : 0;

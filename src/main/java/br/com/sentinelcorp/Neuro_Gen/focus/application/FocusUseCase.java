@@ -77,6 +77,17 @@ public class FocusUseCase {
     }
 
     @Transactional(readOnly = true)
+    public FocusSessionResult getById(String sessionId, String userId) {
+        return FocusSessionResult.from(load(sessionId, userId));
+    }
+
+    @Transactional
+    public void delete(String sessionId, String userId) {
+        FocusSession session = load(sessionId, userId);
+        sessions.delete(session.id());
+    }
+
+    @Transactional(readOnly = true)
     public List<FocusSessionResult> history(String userId, Instant from, Instant to) {
         return sessions.findByUserIdAndPeriod(UserId.of(userId), from, to)
                 .stream().map(FocusSessionResult::from).toList();

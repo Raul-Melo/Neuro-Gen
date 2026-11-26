@@ -61,6 +61,11 @@ public class MoodCheckInRepositoryAdapter implements MoodCheckInRepository {
         return jpa.findFirstByUserIdAndCheckinDate(userId.value(), LocalDate.now()).map(this::toDomain);
     }
 
+    @Override
+    public void delete(MoodCheckInId id) {
+        jpa.deleteById(id.value());
+    }
+
     private MoodCheckIn toDomain(MoodCheckInEntity e) {
         return MoodCheckIn.reconstitute(
                 new MoodCheckInId(e.getId()),

@@ -3,6 +3,7 @@ package br.com.sentinelcorp.Neuro_Gen.agenda.application;
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.command.AgendaCommands.CreateEventCommand;
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.command.AgendaCommands.ReminderInput;
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.command.AgendaCommands.RescheduleEventCommand;
+import br.com.sentinelcorp.Neuro_Gen.agenda.application.command.AgendaCommands.UpdateEventCommand;
 import br.com.sentinelcorp.Neuro_Gen.agenda.application.result.EventResult;
 import br.com.sentinelcorp.Neuro_Gen.agenda.domain.exception.EventNotFoundException;
 import br.com.sentinelcorp.Neuro_Gen.agenda.domain.model.CategoryId;
@@ -63,6 +64,36 @@ public class EventUseCase {
     public void delete(String eventId, String ownerId) {
         load(eventId, ownerId);
         events.delete(EventId.of(eventId));
+    }
+
+    @Transactional(readOnly = true)
+    public EventResult findById(String eventId, String ownerId) {
+        return EventResult.from(load(eventId, ownerId));
+    }
+
+    @Transactional
+    public EventResult update(UpdateEventCommand cmd) {
+        Event event = load(cmd.eventId(), cmd.ownerId());
+        event.updateDetails(
+                cmd.title(), cmd.description(),
+                cmd.type() == null ? null : EventType.valueOf(cmd.type()),
+                CategoryId.of(cmd.categoryId()), cmd.sharedWithSupport());
+        return EventResult.from(events.save(event));
+    }
+
+    @Transactional
+    public EventResult addReminder(String eventId, String ownerId, ReminderInput input) {
+        Event event = load(eventId, ownerId);
+        event.addReminder(Reminder.create(input.minutesBefore(), input.persistent(),
+                input.repeatIntervalMinutes(), input.maxRepetitions()));
+        return EventResult.from(events.save(event));
+    }
+
+    @Transactional
+    public EventResult removeReminder(String eventId, String ownerId, String reminderId) {
+        Event event = load(eventId, ownerId);
+        event.removeReminder(java.util.UUID.fromString(reminderId));
+        return EventResult.from(events.save(event));
     }
 
     @Transactional(readOnly = true)
