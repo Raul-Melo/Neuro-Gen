@@ -9,10 +9,14 @@ public record UserProfileResponse(
         String status,
         boolean emailVerified,
         boolean totpEnabled,
+        boolean hasPendingTotpSetup,
+        String cpf,
+        String birthDate,
         String createdAt) {
 
     public static UserProfileResponse from(UserResult r) {
         return new UserProfileResponse(r.id(), r.email(), r.role(), r.status(),
-                r.emailVerified(), r.totpEnabled(), r.createdAt());
+                r.emailVerified(), r.totpEnabled(), r.hasPendingTotpSetup(),
+                r.cpf(), r.birthDate(), r.createdAt());
     }
 }

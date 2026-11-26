@@ -41,13 +41,24 @@ public class UserController {
     }
 
     @PostMapping("/me/totp")
-    @Operation(summary = "Inicia o setup de 2FA (retorna QR/segredo uma única vez)")
-    public TotpSetupResponse enableTotp() {
-        return TotpSetupResponse.from(totp.enable(new EnableTotpCommand(CurrentUser.requireId().asString())));
+    @Operation(summary = "Inicia o setup de 2FA — gera o segredo pendente (não o expõe aqui)",
+               description = "Após este endpoint, chame GET /me/totp/setup UMA ÚNICA VEZ para obter o segredo.")
+    public ResponseEntity<Void> enableTotp() {
+        totp.enable(new EnableTotpCommand(CurrentUser.requireId().asString()));
+        return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/me/totp/setup")
+    @Operation(summary = "Retorna o segredo TOTP UMA ÚNICA VEZ para configurar o autenticador",
+               description = "Exibe o base32 e o otpAuthUri apenas na primeira chamada. "
+                       + "Chamadas subsequentes retornam erro 422. "
+                       + "Para gerar um novo segredo, chame POST /me/totp novamente.")
+    public TotpSetupResponse getTotpSetupOnce() {
+        return TotpSetupResponse.from(totp.getSetupOnce(CurrentUser.requireId().asString()));
     }
 
     @PostMapping("/me/totp/confirm")
-    @Operation(summary = "Confirma o 2FA com um código válido")
+    @Operation(summary = "Confirma o 2FA com um código válido e ativa a exigência no login")
     public ResponseEntity<Void> confirmTotp(@Valid @RequestBody TotpCodeRequest req) {
         totp.confirm(new ConfirmTotpCommand(CurrentUser.requireId().asString(), req.code()));
         return ResponseEntity.noContent().build();

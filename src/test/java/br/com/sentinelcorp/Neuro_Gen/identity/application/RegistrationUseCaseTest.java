@@ -47,7 +47,8 @@ class RegistrationUseCaseTest {
         when(passwordHasher.hash(any())).thenReturn(Password.ofHash("hash"));
         when(users.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        UserResult result = useCase.register(new RegisterUserCommand("New@Example.com", "senha123", "TITULAR"));
+        UserResult result = useCase.register(new RegisterUserCommand(
+                "New@Example.com", "senha123", "TITULAR", "529.982.247-25", java.time.LocalDate.of(1990, 1, 1)));
 
         assertThat(result.email()).isEqualTo("new@example.com");
         assertThat(result.role()).isEqualTo("TITULAR");
@@ -61,8 +62,8 @@ class RegistrationUseCaseTest {
     void rejectsDuplicateEmail() {
         when(users.existsByEmail(any(Email.class))).thenReturn(true);
 
-        assertThatThrownBy(() ->
-                useCase.register(new RegisterUserCommand("dup@example.com", "senha123", "APOIO")))
+        assertThatThrownBy(() -> useCase.register(new RegisterUserCommand(
+                "dup@example.com", "senha123", "APOIO", "529.982.247-25", java.time.LocalDate.of(1990, 1, 1))))
                 .isInstanceOf(AccountAlreadyExistsException.class);
     }
 }

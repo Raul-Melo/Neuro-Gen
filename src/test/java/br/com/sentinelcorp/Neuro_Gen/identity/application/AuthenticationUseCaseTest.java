@@ -52,10 +52,10 @@ class AuthenticationUseCaseTest {
     }
 
     private User activeUser(TotpSecret totp) {
-        User user = User.reconstitute(UserId.generate(), new Email("user@example.com"),
-                Password.ofHash("hash"), UserRole.TITULAR, AccountStatus.ACTIVE, true, totp,
-                AuditMetadata.createNow("sys"));
-        return user;
+        boolean confirmed = totp != null;
+        return User.reconstitute(UserId.generate(), new Email("user@example.com"),
+                Password.ofHash("hash"), UserRole.TITULAR, AccountStatus.ACTIVE, true,
+                null, null, totp, confirmed, AuditMetadata.createNow("sys"));
     }
 
     @Test

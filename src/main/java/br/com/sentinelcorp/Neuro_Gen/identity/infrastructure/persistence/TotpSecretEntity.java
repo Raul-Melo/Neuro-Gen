@@ -31,6 +31,12 @@ public class TotpSecretEntity {
     @Column(name = "enabled_at", nullable = false)
     private Instant enabledAt;
 
+    @Column(name = "setup_shown", nullable = false)
+    private boolean setupShown;
+
+    @Column(name = "confirmed", nullable = false)
+    private boolean confirmed;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 }

@@ -48,12 +48,14 @@ class AuthControllerTest {
     @Test
     void registerReturns201() throws Exception {
         when(registration.register(any())).thenReturn(new UserResult(
-                "id-1", "user@example.com", "TITULAR", "PENDING_VERIFICATION", false, false, "2026-01-01T00:00:00Z"));
+                "id-1", "user@example.com", "TITULAR", "PENDING_VERIFICATION", false, false, false,
+                "123.456.789-09", "1990-01-01", "2026-01-01T00:00:00Z"));
 
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"email":"user@example.com","password":"senha123","role":"TITULAR"}"""))
+                                {"email":"user@example.com","password":"senha123","role":"TITULAR",\
+"cpf":"529.982.247-25","birthDate":"1990-01-01"}"""))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").value("id-1"))
                 .andExpect(jsonPath("$.email").value("user@example.com"));
@@ -64,7 +66,8 @@ class AuthControllerTest {
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"email":"not-email","password":"senha123","role":"TITULAR"}"""))
+                                {"email":"not-email","password":"senha123","role":"TITULAR",\
+"cpf":"529.982.247-25","birthDate":"1990-01-01"}"""))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
     }

@@ -54,4 +54,22 @@ public class SamstevensTotpService implements TotpService {
         String base32 = cipher.decryptFromBase64(secret.encryptedBase32Secret());
         return codeVerifier.isValidCode(base32, code);
     }
+
+    @Override
+    public String decryptBase32(TotpSecret secret) {
+        return cipher.decryptFromBase64(secret.encryptedBase32Secret());
+    }
+
+    @Override
+    public String buildOtpAuthUri(String userEmail, String base32Plain) {
+        return new QrData.Builder()
+                .label(userEmail)
+                .secret(base32Plain)
+                .issuer(ISSUER)
+                .algorithm(HashingAlgorithm.SHA1)
+                .digits(6)
+                .period(30)
+                .build()
+                .getUri();
+    }
 }

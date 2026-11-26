@@ -52,7 +52,8 @@ public class AuthController {
     @PostMapping("/register")
     @Operation(summary = "Cadastra uma conta (Titular ou Apoio)", security = {})
     public ResponseEntity<UserProfileResponse> register(@Valid @RequestBody RegisterRequest req) {
-        var result = registration.register(new RegisterUserCommand(req.email(), req.password(), req.role()));
+        var result = registration.register(new RegisterUserCommand(req.email(), req.password(), req.role(),
+                req.cpf(), req.birthDate()));
         return ResponseEntity.status(HttpStatus.CREATED).body(UserProfileResponse.from(result));
     }
 

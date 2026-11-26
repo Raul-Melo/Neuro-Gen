@@ -9,8 +9,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class UserTest {
 
+    private static final Cpf TEST_CPF = new Cpf("52998224725");
+
     private User newUser() {
-        return User.register(new Email("user@example.com"), Password.ofHash("hash"), UserRole.TITULAR);
+        return User.register(new Email("user@example.com"), Password.ofHash("hash"),
+                UserRole.TITULAR, TEST_CPF, java.time.LocalDate.of(1990, 1, 1));
     }
 
     @Test
@@ -41,11 +44,14 @@ class UserTest {
     }
 
     @Test
-    void enablingTotpMakesItRequired() {
+    void enablingTotpMakesItRequiredOnlyAfterConfirmation() {
         User user = newUser();
         assertThat(user.requiresTotp()).isFalse();
         user.enableTotp(new TotpSecret("encrypted-secret"));
-        assertThat(user.requiresTotp()).isTrue();
+        assertThat(user.hasPendingTotpSetup()).isTrue();
+        assertThat(user.requiresTotp()).isFalse();  // pendente, não confirmado
+        user.confirmTotp();
+        assertThat(user.requiresTotp()).isTrue();   // ativo após confirmação
         user.disableTotp();
         assertThat(user.requiresTotp()).isFalse();
     }

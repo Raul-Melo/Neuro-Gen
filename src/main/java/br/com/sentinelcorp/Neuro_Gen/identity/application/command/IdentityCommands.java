@@ -9,7 +9,8 @@ public final class IdentityCommands {
     private IdentityCommands() {
     }
 
-    public record RegisterUserCommand(String email, String rawPassword, String role) {
+    public record RegisterUserCommand(String email, String rawPassword, String role,
+                                      String cpf, java.time.LocalDate birthDate) {
     }
 
     public record VerifyEmailCommand(String token) {

@@ -5,6 +5,7 @@ import br.com.sentinelcorp.Neuro_Gen.identity.application.command.IdentityComman
 import br.com.sentinelcorp.Neuro_Gen.identity.application.result.UserResult;
 import br.com.sentinelcorp.Neuro_Gen.identity.domain.exception.AccountAlreadyExistsException;
 import br.com.sentinelcorp.Neuro_Gen.identity.domain.exception.TokenExpiredException;
+import br.com.sentinelcorp.Neuro_Gen.identity.domain.model.Cpf;
 import br.com.sentinelcorp.Neuro_Gen.identity.domain.model.Password;
 import br.com.sentinelcorp.Neuro_Gen.identity.domain.model.User;
 import br.com.sentinelcorp.Neuro_Gen.identity.domain.model.UserRole;
@@ -57,8 +58,9 @@ public class RegistrationUseCase {
             throw new AccountAlreadyExistsException(email.value());
         }
 
+        Cpf cpf = Cpf.of(cmd.cpf());
         Password hash = passwordHasher.hash(cmd.rawPassword());
-        User user = User.register(email, hash, role);
+        User user = User.register(email, hash, role, cpf, cmd.birthDate());
         User saved = users.save(user);
         events.publishFrom(user);
 
@@ -80,6 +82,20 @@ public class RegistrationUseCase {
         verificationTokens.markUsed(token);
         events.publishFrom(user);
         return UserResult.from(saved);
+    }
+
+    /**
+     * Reemite um token de verificação e o retorna como string — usado apenas por endpoints de dev.
+     * Em produção este método não deve ser chamado; o token é enviado por e-mail.
+     */
+    @Transactional
+    public String issueVerificationTokenForDev(String email) {
+        User user = users.findByEmail(new Email(email))
+                .orElseThrow(() -> new br.com.sentinelcorp.Neuro_Gen.shared.domain.exception.NotFoundException("Usuário", email));
+        String rawToken = Tokens.random();
+        Instant expiresAt = Instant.now().plus(props.getEmailVerification().getTtlHours(), ChronoUnit.HOURS);
+        verificationTokens.save(VerificationToken.issue(user.id(), Tokens.sha256Hex(rawToken), expiresAt));
+        return rawToken;
     }
 
     private void issueAndSendVerification(User user) {

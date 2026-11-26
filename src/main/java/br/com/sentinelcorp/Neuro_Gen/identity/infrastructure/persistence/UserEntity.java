@@ -9,6 +9,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 
 /** Entidade JPA da conta (tabela {@code ng_identity.ng_users}). */
@@ -39,6 +40,12 @@ public class UserEntity {
 
     @Column(name = "totp_enabled", nullable = false)
     private boolean totpEnabled;
+
+    @Column(name = "cpf", unique = true)
+    private String cpf;
+
+    @Column(name = "birth_date")
+    private LocalDate birthDate;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;

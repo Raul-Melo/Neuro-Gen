@@ -1,6 +1,7 @@
 package br.com.sentinelcorp.Neuro_Gen.identity.infrastructure.persistence;
 
 import br.com.sentinelcorp.Neuro_Gen.identity.domain.model.AccountStatus;
+import br.com.sentinelcorp.Neuro_Gen.identity.domain.model.Cpf;
 import br.com.sentinelcorp.Neuro_Gen.identity.domain.model.Password;
 import br.com.sentinelcorp.Neuro_Gen.identity.domain.model.TotpSecret;
 import br.com.sentinelcorp.Neuro_Gen.identity.domain.model.User;
@@ -37,6 +38,8 @@ public class UserRepositoryAdapter implements UserRepository {
         entity.setStatus(user.status().name());
         entity.setEmailVerified(user.emailVerified());
         entity.setTotpEnabled(user.totpEnabled());
+        entity.setCpf(user.cpf() == null ? null : user.cpf().digits());
+        entity.setBirthDate(user.birthDate());
         entity.setCreatedAt(user.audit().createdAt());
         entity.setUpdatedAt(user.audit().updatedAt());
         entity.setDeletedAt(user.status() == AccountStatus.DELETED ? Instant.now() : null);
@@ -53,9 +56,12 @@ public class UserRepositoryAdapter implements UserRepository {
                 e.setUserId(user.id().value());
                 e.setCreatedAt(Instant.now());
                 e.setEnabledAt(Instant.now());
+                e.setSetupShown(false);
+                e.setConfirmed(false);
                 return e;
             });
             totp.setEncryptedSecret(user.totpSecret().encryptedBase32Secret());
+            totp.setConfirmed(user.totpConfirmed());
             totpJpa.save(totp);
         } else {
             totpJpa.findByUserId(user.id().value()).ifPresent(e -> totpJpa.deleteByUserId(user.id().value()));
@@ -84,9 +90,10 @@ public class UserRepositoryAdapter implements UserRepository {
     }
 
     private User toDomain(UserEntity e) {
-        TotpSecret secret = totpJpa.findByUserId(e.getId())
-                .map(t -> new TotpSecret(t.getEncryptedSecret()))
-                .orElse(null);
+        var totpRow = totpJpa.findByUserId(e.getId());
+        TotpSecret secret = totpRow.map(t -> new TotpSecret(t.getEncryptedSecret())).orElse(null);
+        boolean totpConfirmed = totpRow.map(TotpSecretEntity::isConfirmed).orElse(false);
+        Cpf cpf = e.getCpf() == null ? null : new Cpf(e.getCpf());
         return User.reconstitute(
                 new UserId(e.getId()),
                 new Email(e.getEmail()),
@@ -94,7 +101,10 @@ public class UserRepositoryAdapter implements UserRepository {
                 UserRole.valueOf(e.getRole()),
                 AccountStatus.valueOf(e.getStatus()),
                 e.isEmailVerified(),
+                cpf,
+                e.getBirthDate(),
                 secret,
+                totpConfirmed,
                 new AuditMetadata(e.getCreatedAt(), e.getUpdatedAt(), e.getId().toString()));
     }
 }

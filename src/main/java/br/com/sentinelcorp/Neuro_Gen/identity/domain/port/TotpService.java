@@ -11,6 +11,12 @@ public interface TotpService {
     /** @return true se o código informado é válido para o segredo na janela de tempo atual. */
     boolean verify(TotpSecret secret, String code);
 
+    /** Decifra o segredo e retorna o base32 em texto plano. */
+    String decryptBase32(TotpSecret secret);
+
+    /** Constrói o URI otpauth para um segredo já existente (para exibição no GET de setup). */
+    String buildOtpAuthUri(String userEmail, String base32Plain);
+
     /** Segredo recém-gerado. {@code base32Plain}/{@code otpAuthUri} são exibidos uma única vez no setup. */
     record GeneratedTotp(TotpSecret secret, String base32Plain, String otpAuthUri) {
     }
